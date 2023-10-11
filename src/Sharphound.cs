@@ -26,6 +26,7 @@ using System.Threading.Tasks;
 using CommandLine;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Sharphound.Client;
 using Sharphound.Runtime;
 using SharpHoundCommonLib;
@@ -487,6 +488,22 @@ namespace Sharphound
                     //     cancellationTokenSource.Cancel();
                     // };
 
+                    // SCCM collection
+                    if (!string.IsNullOrEmpty(options.SccmServer) && !string.IsNullOrEmpty(options.SccmSiteCode))
+                    {
+                        JToken cmPivotResponse = await SCCMCollector.Collect(options.SccmServer, options.SccmSiteCode, "FileContent('c:\\Windows\\CCM\\ScriptStore\\SCCMHound.log')", "SMS00001", null, new string[] { "10", "5" }, true);
+                        if (cmPivotResponse != null)
+                        {
+                            APIIngest.SendIt(cmPivotResponse);
+                        }
+                        else
+                        {
+                            logger.LogError($"The SMS Provider did not respond with SCCMHound data");
+                        }
+                    }                   
+
+                    /*
+                    // LDAP collection
                     // Create new chain links
                     Links<IContext> links = new SharpLinks();
 
@@ -509,6 +526,7 @@ namespace Sharphound
                     context = await links.AwaitLoopCompletion(context);
                     context = links.SaveCacheFile(context);
                     links.Finish(context);
+                    */
                 });
             }
             catch (Exception ex)

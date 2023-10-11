@@ -39,6 +39,7 @@
         <Reference Include="System.DirectoryServices" />
         <Reference Include="System.DirectoryServices.Protocols" />
         <Reference Include="System.IO.Compression" />
+        <Reference Include="System.Management" />
     </ItemGroup>
     <Target Name="PS1" AfterTargets="Build">
         <Message Text="Test" />

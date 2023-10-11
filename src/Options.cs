@@ -37,6 +37,12 @@ namespace Sharphound
         [Option(HelpText = "Path to file containing computer names to enumerate", Default = null)]
         public string ComputerFile { get; set; }
 
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) SMS Provider or site server for collection", Default = null)]
+        public string SccmServer { get; set; }
+
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) site code for collection", Default = null)]
+        public string SccmSiteCode { get; set; }
+
         // Options that affect output of SharpHound
         [Option(HelpText = "Directory to output file too", Default = ".")]
         public string OutputDirectory { get; set; }
