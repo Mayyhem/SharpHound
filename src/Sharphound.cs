@@ -489,18 +489,18 @@ namespace Sharphound
                     // };
 
                     // SCCM collection
-                    if (!string.IsNullOrEmpty(options.SccmServer) && !string.IsNullOrEmpty(options.SccmSiteCode))
+                    if (!string.IsNullOrEmpty(options.SccmServer) && !string.IsNullOrEmpty(options.SccmSiteCode) && !string.IsNullOrEmpty(options.SccmCollectionId))
                     {
-                        JToken cmPivotResponse = await SCCMCollector.Collect(options.SccmServer, options.SccmSiteCode, "FileContent('c:\\Windows\\CCM\\ScriptStore\\SCCMHound.log')", "SMS00001", null, new string[] { "10", "5" }, true);
+                        JToken cmPivotResponse = await SCCMCollector.Collect(options.SccmServer, options.SccmSiteCode, $"FileContent('{options.FetchResultsFile}')", options.SccmCollectionId, null, new string[] { "10", "5" }, true);
                         if (cmPivotResponse != null)
                         {
                             APIIngest.SendIt(cmPivotResponse);
                         }
                         else
                         {
-                            logger.LogError($"The SMS Provider did not respond with SCCMHound data");
+                            logger.LogError($"The SMS Provider did not respond with FETCH data");
                         }
-                    }                   
+                    }             
 
                     /*
                     // LDAP collection

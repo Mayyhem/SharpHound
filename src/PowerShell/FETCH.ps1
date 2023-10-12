@@ -1,7 +1,6 @@
 ﻿<#
 -------------------------------------------
-
-FETCH: Flexible Enumeration Tool for Configuration Hierarchies
+FETCH: Fleetwide Enumeration Tool for Configuration Hierarchies
 
 Author: SpecterOps
 Purpose:
@@ -10,6 +9,18 @@ Purpose:
 
 -------------------------------------------
 #>
+
+# Command line option to write output to JSON file or stdout
+param(
+    [ValidateScript({
+        if ($_ -eq "stdout" -or $_ -match '\.json$') {
+            $true
+        } else {
+            throw "Output must be 'stdout' or a file path ending in '.json'"
+        }
+    })]
+    [string]$OutputParam = "C:\Windows\CCM\ScriptStore\FetchResults.json"
+)
 
 
 # Collect local system domain computer account SID via LDAP
@@ -72,7 +83,7 @@ foreach ($EventID in $EventIDs) {
 }
 
 $sessions = @{
-    "Results" = $eventResults
+    "Results" = $eventResults | Sort-Object -Unique
     "Collected" = $true
     "FailureReason" = $null
 }
@@ -187,4 +198,8 @@ $output = @{
     }
 }
 
-$output | ConvertTo-Json -Depth 6 -Compress | Out-File C:\Windows\CCM\ScriptStore\SCCMHound_results.json
+if ($OutputParam -eq "stdout") {
+    $output | ConvertTo-Json -Depth 6 -Compress
+} else {
+    $output | ConvertTo-Json -Depth 6 -Compress | Out-File $OutputParam
+}

@@ -307,7 +307,7 @@ namespace Sharphound
             //httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
 
             // Signer
-            var authHandler = new BHEAuthSigner(ingestCredentials.TokenKey, ingestCredentials.TokenId, httpHandler);
+            var authHandler = new AuthSigner(ingestCredentials.TokenKey, ingestCredentials.TokenId, httpHandler);
             var client = new HttpClient(authHandler);
             APIClient signedIngestClient = new APIClient(client, SCHEME, BHE_DOMAIN, PORT, ingestCredentials, userAgent);
             
@@ -440,7 +440,7 @@ namespace Sharphound
             httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
 
             // Signer
-            var authHandler = new BHEAuthSigner(ingestCredentials.TokenKey, ingestCredentials.TokenId, httpHandler);
+            var authHandler = new AuthSigner(ingestCredentials.TokenKey, ingestCredentials.TokenId, httpHandler);
             var client = new HttpClient(authHandler);
             APIClient signedIngestClient = new APIClient(client, SCHEME, BHE_DOMAIN, PORT, ingestCredentials, userAgent);
 
@@ -473,7 +473,7 @@ namespace Sharphound
             Console.WriteLine($"[*] Response: {response}");
         }
 
-        public static void SendIt(JToken SCCMHoundData)
+        public static void SendIt(JToken BloodHoundData)
         {
             // Get environment variables from %USERPROFILE%\.env
             string basePath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -494,7 +494,7 @@ namespace Sharphound
             }
 
             // Load environment variables
-            string BHE_DOMAIN = Environment.GetEnvironmentVariable("BHE_DOMAIN");
+            string DOMAIN = Environment.GetEnvironmentVariable("DOMAIN");
             int PORT = new int();
             int.TryParse(Environment.GetEnvironmentVariable("PORT"), out PORT); 
             string SCHEME = Environment.GetEnvironmentVariable("SCHEME");
@@ -504,7 +504,7 @@ namespace Sharphound
             string TOKEN_KEY = Environment.GetEnvironmentVariable("TOKEN_KEY");
             string FILEPATH_ZIP = Environment.GetEnvironmentVariable("FILEPATH_ZIP");
 
-            // Create BHE client
+            // Create API client
             Credentials adminCredentials = new Credentials(TOKEN_ID, TOKEN_KEY);
             var httpHandler = new HttpClientHandler();
 
@@ -514,16 +514,16 @@ namespace Sharphound
             httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
 
             // Auth handler
-            var authHandler = new BHEAuthSigner(adminCredentials.TokenKey, adminCredentials.TokenId, httpHandler);
+            var authHandler = new AuthSigner(adminCredentials.TokenKey, adminCredentials.TokenId, httpHandler);
             var client = new HttpClient(authHandler);
             var header = new ProductHeaderValue("sharphound",
                 Assembly.GetExecutingAssembly().GetName().Version.ToString());
             client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(header));
-            APIClient adminClient = new APIClient(client, SCHEME, BHE_DOMAIN, PORT, adminCredentials);
+            APIClient adminClient = new APIClient(client, SCHEME, DOMAIN, PORT, adminCredentials);
 
             
             // Prepare data
-            JObject obj = SCCMHoundData.ToObject<JObject>();
+            JObject obj = BloodHoundData.ToObject<JObject>();
 
             // Extract the "Content" property for each "Line"
             var result = obj["value"]
@@ -548,9 +548,9 @@ namespace Sharphound
                 Console.WriteLine($"[*] Setting meta version");
                 if (parsedContent["meta"] is JObject metaObject)
                 {
-                    metaObject["version"] = 6;
+                    metaObject["version"] = 5;
                 }
-                IngestDataFromJSON(adminClient, adminCredentials, SHARPHOUND_CLIENT_NAME, SHARPHOUND_USER_AGENT, parsedContent, BHE_DOMAIN, SCHEME, PORT).Wait();
+                IngestDataFromJSON(adminClient, adminCredentials, SHARPHOUND_CLIENT_NAME, SHARPHOUND_USER_AGENT, parsedContent, DOMAIN, SCHEME, PORT).Wait();
 
                 // Add the parsed content to the result JObject, using the "Line" number as the key
                 contentAsJObject[lineData.Line] = parsedContent;

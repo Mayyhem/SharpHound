@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Sharphound
 {
-    public class BHEAuthSigner : DelegatingHandler
+    public class AuthSigner : DelegatingHandler
     {
         private const string AuthorizationHeader = "Authorization";
         private const string DateHeader = "RequestDate";
@@ -17,14 +17,14 @@ namespace Sharphound
         private readonly string _token;
         private readonly string _tokenId;
 
-        public BHEAuthSigner(string token, string tokenId)
+        public AuthSigner(string token, string tokenId)
         {
             _token = token;
             _tokenId = tokenId;
             InnerHandler = new HttpClientHandler();
         }
 
-        public BHEAuthSigner(string token, string tokenId, HttpMessageHandler innerHandler) : base(innerHandler)
+        public AuthSigner(string token, string tokenId, HttpMessageHandler innerHandler) : base(innerHandler)
         {
             _token = token;
             _tokenId = tokenId;
