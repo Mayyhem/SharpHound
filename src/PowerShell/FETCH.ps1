@@ -1,6 +1,6 @@
 ﻿<#
 -------------------------------------------
-FETCH: Fleetwide Enumeration Tool for Configuration Hierarchies
+FETCH: Fleetwide Enumeration Tool for Configuration Harvesting
 
 Author: SpecterOps
 Purpose:
@@ -10,18 +10,45 @@ Purpose:
 -------------------------------------------
 #>
 
-# Command line option to write output to JSON file or stdout
+
+<#
+-------------------------------------------
+Command line options
+-------------------------------------------
+#>
 param(
     [ValidateScript({
-        if ($_ -eq "stdout" -or $_ -match '\.json$') {
+        if ($_ -eq "stdout" -or ((Test-Path (Split-Path -Path $_)) -and $_ -match '\.json$')) {
             $true
+        } elseif (-not (Test-Path (Split-Path -Path $_))) {
+            throw "The specified directory does not exist: $(Split-Path -Path $_)"
         } else {
-            throw "Output must be 'stdout' or a file path ending in '.json'"
+            throw "Output must be 'stdout' or a local/remote file path ending in '.json'"
         }
     })]
-    [string]$OutputParam = "C:\Windows\CCM\ScriptStore\FetchResults.json"
+    [string]$OutputParam = "C:\Windows\CCM\ScriptStore\FetchResults.json",
+
+    [ValidateScript({
+        if ($_ -eq "none" -or (Test-Path (Split-Path -Path $_))) {
+            $true
+        } elseif (-not (Test-Path (Split-Path -Path $_))) {
+            throw "The specified directory does not exist: $(Split-Path -Path $_)"
+        } else {
+            throw "Output must be 'none' or a valid local/remote file path"
+        }
+    })]
+    [string]$LogParam = "C:\Windows\CCM\ScriptStore\FetchExecution.log"
 )
 
+# Initialize logging
+if ($LogParam -ne "none") {$ts = (Get-Date).ToUniversalTime(); "$ts UTC - FETCH execution started" | Out-File -FilePath $LogParam -Append}
+
+try {
+<#
+-------------------------------------------
+Collect sessions
+-------------------------------------------
+#>
 
 # Collect local system domain computer account SID via LDAP
 $ComputerName = $env:COMPUTERNAME
@@ -30,13 +57,6 @@ $ComputerDomainSID = $ADAccount.Translate([System.Security.Principal.SecurityIde
 
 # Collect local system FQDN
 $ComputerFQDN = [System.Net.Dns]::GetHostEntry([string]"localhost").HostName
-
-
-<#
--------------------------------------------
-Collect sessions
--------------------------------------------
-#>
 
 # Define timespan for session collection
 $sevenDaysAgo = (Get-Date).AddDays(-7)
@@ -63,11 +83,10 @@ foreach ($EventID in $EventIDs) {
             if ($ipAddress) {
                 
                 # Resolve the source IP address to a hostname
-                $ComputerName = Resolve-DnsName -Name $ipAddress -Type PTR
-                $ADAccount = New-Object System.Security.Principal.NTAccount($ComputerName.NameHost.Split(".")[0] + "$")
-                $SourceComputerDomainSID = $ADAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+                $ComputerName = Resolve-DnsName -Name $ipAddress -Type PTR 2>$null
+                if ($ComputerName) {$ADAccount = New-Object System.Security.Principal.NTAccount($ComputerName.NameHost.Split(".")[0] + "$")}
+                if ($ADAccount) {$SourceComputerDomainSID = $ADAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value}
             }
-
             else {
                 # Collect local logon sessions on this host
                 $SourceComputerDomainSID = $ComputerDomainSID
@@ -83,7 +102,7 @@ foreach ($EventID in $EventIDs) {
 }
 
 $sessions = @{
-    "Results" = $eventResults | Sort-Object -Unique
+    "Results" = $eventResults
     "Collected" = $true
     "FailureReason" = $null
 }
@@ -170,7 +189,9 @@ foreach ($group in $(Get-LocalGroup)) {
         $groups += $currentGroup
     }
 }
-
+} catch {
+    if ($LogParam -ne "none") {$ts = (Get-Date).ToUniversalTime(); "$ts UTC - FETCH encountered a terminating error: $($_.Exception.Message)" | Out-File -FilePath $LogParam -Append}
+}
 <#
 -------------------------------------------
 Format output and stage for SharpHound collection
@@ -184,7 +205,7 @@ $output = @{
             Properties = @{
                 name = $ComputerFQDN
             }
-            Sessions = $sessions
+            Sessions = $sessions | Sort-Object -Unique
             UserRights = $userRights
             LocalGroups = $groups
         }
@@ -203,3 +224,6 @@ if ($OutputParam -eq "stdout") {
 } else {
     $output | ConvertTo-Json -Depth 6 -Compress | Out-File $OutputParam
 }
+
+# End logging
+if ($LogParam -ne "none") {$ts = (Get-Date).ToUniversalTime(); "$ts UTC - FETCH execution completed" | Out-File -FilePath $LogParam -Append}
