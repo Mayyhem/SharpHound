@@ -27,7 +27,7 @@ param(
             throw "Output must be 'none' or a valid local/remote file path"
         }
     })]
-    [string]$LogParam = "C:\Windows\CCM\ScriptStore\FetchExecution.log",
+    [string]$logParam = "C:\Windows\CCM\ScriptStore\FetchExecution.log",
 
     # Validate that the output file path exists or is set to "stdout" (default: "C:\Windows\CCM\ScriptStore\FetchResults.json")
     [ValidateScript({
@@ -39,15 +39,18 @@ param(
             throw "Output must be 'stdout' or a local/remote file path ending in '.json'"
         }
     })]
-    [string]$OutputParam = "C:\Windows\CCM\ScriptStore\FetchResults.json",
+    [string]$outputParam = "C:\Windows\CCM\ScriptStore\FetchResults.json",
 
     # Number of days behind to fetch sessions (default: 7)
     [ValidateRange(1,365)]
-    [int]$SessionLookbackDays = 7
+    [int]$sessionLookbackDays = 7
 )
 
 # Initialize logging
-if ($LogParam -ne "none") {$ts = (Get-Date).ToUniversalTime(); "$ts UTC - FETCH execution started" | Out-File -FilePath $LogParam -Append}
+if ($logParam -ne "none") {
+    $nowTimeStamp = (Get-Date).ToUniversalTime()
+    "$nowTimeStamp UTC - FETCH execution started" | Out-File -FilePath $logParam -Append
+    }
 
 # Catch and log execution error messages
 try {
@@ -58,79 +61,115 @@ try {
     #>
 
     # Collect local system domain computer account SID via LDAP
-    $ComputerName = $env:COMPUTERNAME
-    $ADAccount = New-Object System.Security.Principal.NTAccount($ComputerName + "$")
-    $ComputerDomainSID = $ADAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    $thisComputerName = $env:COMPUTERNAME
+    $thisComputerDomainAccount = New-Object System.Security.Principal.NTAccount($thisComputerName + "$")
+    $thisComputerDomainSID = $thisComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
 
     # Collect local system FQDN
-    $ComputerFQDN = [System.Net.Dns]::GetHostEntry([string]"localhost").HostName
+    $thisComputerFQDN = [System.Net.Dns]::GetHostEntry([string]"localhost").HostName
 
     # Define timespan for session collection
-    $SessionLookbackStartDate = (Get-Date).AddDays(-$SessionLookbackDays)
+    $sessionLookbackStartDate = (Get-Date).AddDays(-$sessionLookbackDays)
 
     # Define Event IDs to collect
-    $EventIDs = 4624#, 4648
-    $eventResults = @()
+    $eventIDs = 4624, 4648
+    $logonEventResults = @()
 
-    foreach ($EventID in $EventIDs) {
-        $events = Get-WinEvent -FilterHashtable @{Logname='Security';ID=$EventID;StartTime=$SessionLookbackStartDate}
+    foreach ($eventID in $eventIDs) {
+        # Enumerate logon events in the specified window
+        $events = Get-WinEvent -FilterHashtable @{Logname='Security';ID=$eventID;StartTime=$sessionLookbackStartDate}
         foreach ($event in $events) {
-            
-            $eventXml = [xml]$event.ToXml()
-            $eventData = $eventXml.Event.EventData.Data
+            $eventXML = [xml]$event.ToXml()
+            $eventData = $eventXML.Event.EventData.Data
 
-            # Initialize fields to use to filter log data
-            $userSID = $eventData | Where-Object { $_.Name -eq 'TargetUserSid' } | Select-Object -ExpandProperty '#text'
-            $logonType = $eventData | Where-Object { $_.Name -eq 'LogonType' } | Select-Object -ExpandProperty '#text'
-            $ipAddress = $eventData | Where-Object { $_.Name -eq 'IpAddress' } | Select-Object -ExpandProperty '#text'
-        
-            # Collect user logon sessions on this host 
-            if ($userSID -like "S-1-5-21-*") {
+            if ($eventID -eq "4624") {
+                # Initialize fields to use to filter log data
+                $logonType = $eventData | Where-Object { $_.Name -eq 'LogonType' } | Select-Object -ExpandProperty '#text'
+                $sourceIPAddress = $eventData | Where-Object { $_.Name -eq 'IpAddress' } | Select-Object -ExpandProperty '#text'
+                $targetUserSID = $eventData | Where-Object { $_.Name -eq 'TargetUserSid' } | Select-Object -ExpandProperty '#text'
+                
+                # Collect domain user logon sessions
+                if ($targetUserSID -like "S-1-5-21-*") {
          
-                # Collect sessions initiated from remote hosts (Logon Type 3: Network)
-                if ($ipAddress) {
+                    # Collect sessions initiated from remote hosts (Logon Type 3: Network)
+                    if ($sourceIPAddress) {
        
-                    # Resolve the source IP address to a hostname, discarding non-terminating errors (failed resolution)
-                    $ComputerName = Resolve-DnsName -Name $ipAddress -Type PTR 2>$null
+                        # Resolve the source IP address to a hostname, discarding non-terminating errors (failed resolution)
+                        $sourceComputerName = Resolve-DnsName -Name $sourceIPAddress -Type PTR 2>$null
 
-                    if ($ComputerName) {
-                        $ADAccount = New-Object System.Security.Principal.NTAccount($ComputerName.NameHost.Split(".")[0] + "$")
-                    }
+                        # Translate the hostname to a domain SID
+                        if ($sourceComputerName) {
+                            $sourceComputerDomainAccount = New-Object System.Security.Principal.NTAccount($sourceComputerName.NameHost.Split(".")[0] + "$")
+                        }
 
-                    if ($ADAccount) {
-                        $SourceComputerDomainSID = $ADAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+                        if ($sourceComputerDomainAccount) {
+                            $sourceComputerDomainSID = $sourceComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+                        }
                     }
-                }
-                else {
                     # Collect local logon sessions on this host
-                    $SourceComputerDomainSID = $ComputerDomainSID
-                }
-
-                # Create a record for this domain user session
-                $newSession = @{
-                    UserSID = $userSID
-                    ComputerSID = $SourceComputerDomainSID
-                    LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
-                }
-
-                # Check if a session with the same UserSID and ComputerSID already exists
-                $existingSession = $eventResults | Where-Object { $_.UserSID -eq $userSID -and $_.ComputerSID -eq $SourceComputerDomainSID }
-
-                if ($existingSession) {
-                    # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
-                    if ($newSession.LastSeen -gt $existingSession.LastSeen) {
-                        $existingSession.LastSeen = $newSession.LastSeen
+                    else {
+                        $sourceComputerDomainSID = $thisComputerDomainSID
                     }
-                } else {
-                    # If no session with the same UserSID and ComputerSID is found, add the session to the script output
-                    $eventResults += $newSession
+
+                    # Create a record for this domain user session
+                    $newSession = @{
+                        UserSID = $targetUserSID
+                        ComputerSID = $sourceComputerDomainSID
+                        LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
+                    }
+
+                    # Check if a session with the same UserSID and ComputerSID already exists
+                    $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserSID -and $_.ComputerSID -eq $sourceComputerDomainSID }
+
+                    if ($existingSession) {
+                        # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
+                        if ($newSession.LastSeen -gt $existingSession.LastSeen) {
+                            $existingSession.LastSeen = $newSession.LastSeen
+                        }
+                    } else {
+                        # If no session with the same UserSID and ComputerSID is found, add the session to the script output
+                        $logonEventResults += $newSession
+                    }
+                }
+
+            } elseif ($eventID -eq "4648") {
+
+                # Initialize fields to use to filter log data
+                $targetUserName = $eventData | Where-Object { $_.Name -eq 'TargetUserName' } | Select-Object -ExpandProperty '#text'
+                $targetDomainName = $eventData | Where-Object { $_.Name -eq 'TargetDomainName' } | Select-Object -ExpandProperty '#text'
+
+                # Convert TargetUserName and TargetDomainName to domain SID
+                $targetUserDomainAccount = New-Object System.Security.Principal.NTAccount("$targetDomainName\$targetUserName")
+                $targetUserDomainSID = $targetUserDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+
+                # Collect domain user logon sessions on this host that did not originate from SYSTEM
+                if ($targetUserDomainSID -like "S-1-5-21-*" -and $targetUserDomainSID -ne $thisComputerDomainSID) {
+                    # Create a record for this domain user session
+                    $newSession = @{
+                        UserSID = $targetUserDomainSID
+                        ComputerSID = $thisComputerDomainSID
+                        LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
+                    }
+
+                    # Check if a session with the same UserSID and ComputerSID already exists
+                    $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserDomainSID -and $_.ComputerSID -eq $thisComputerDomainSID }
+
+                    if ($existingSession) {
+                        # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
+                        if ($newSession.LastSeen -gt $existingSession.LastSeen) {
+                            $existingSession.LastSeen = $newSession.LastSeen
+                        }
+                    } else {
+                        # If no session with the same UserSID and ComputerSID is found, add the session to the script output
+                        $logonEventResults += $newSession
+                    }
                 }
             }
         }
     }
-
+    
     $sessions = @{
-        "Results" = $eventResults 
+        "Results" = $logonEventResults 
         "Collected" = $true
         "FailureReason" = $null
     }
@@ -143,7 +182,7 @@ try {
     #>
 
     # Export the security configuration to a file, discarding non-terminating errors to prevent stdout pollution
-    secedit /export /areas USER_RIGHTS /cfg "secedit.cfg" > NUL 2>&1
+    secedit /export /areas USER_RIGHTS /cfg "secedit.cfg" > $null 2>&1
 
     # Read the contents of the exported file
     $seceditContents = Get-Content "secedit.cfg" -Raw
@@ -160,12 +199,16 @@ try {
     $userRights = @()
 
     foreach ($line in $userRightsLines) {
-        $lineParts = $line -split "=" # Split SIDs from rights assignments
-        $right = $lineParts[0].Trim() 
-        $sids = $lineParts[1].Trim() -split "," # Split SIDs into a list
+        # Split SIDs from rights assignments
+        $lineParts = $line -split "=" 
+        $right = $lineParts[0].Trim()
+        # Split SIDs into a list
+        $sids = $lineParts[1].Trim() -split "," 
         $sids = $sids | ForEach-Object {
-            $sid = $_ -replace "^\*", "" # Remove leading asterisk from each SID
-            $sid = $sid -replace "S-1-5-32", $ComputerDomainSID  # Replace built-in local group SIDs with domain computer SID
+            # Remove leading asterisk from each SID
+            $sid = $_ -replace "^\*", ""
+            # Replace built-in local group SIDs with domain computer SID
+            $sid = $sid -replace "S-1-5-32", $thisComputerDomainSID  
             @{
                 "ObjectIdentifier" = $sid
                 "ObjectType" = "LocalGroup"
@@ -196,6 +239,7 @@ try {
         if ($group.PrincipalSource -eq "Local" -and $group.SID.Value -notcontains $ComputerDomainSID) {
             # Store attributes for each local group
             $currentGroup = @{
+            # Replace built-in local group SIDs with domain computer SID
             "ObjectIdentifier" = $($group.SID.Value.Replace("S-1-5-32", $ComputerDomainSID))
             "Name" = $group.Name.ToUpper() + "@" + $ComputerFQDN
             "Results" = @()
@@ -219,7 +263,7 @@ try {
     }
 
 } catch {
-    if ($LogParam -ne "none") {$ts = (Get-Date).ToUniversalTime(); "$ts UTC - FETCH encountered a terminating error: $($_.Exception.Message)" | Out-File -FilePath $LogParam -Append}
+    if ($logParam -ne "none") {$ts = (Get-Date).ToUniversalTime(); "$ts UTC - FETCH encountered an error: $($_.Exception.Message)" | Out-File -FilePath $logParam -Append}
 }
 
 <#
@@ -231,9 +275,9 @@ Format output and stage for SharpHound collection
 $output = @{
     data = @(
         @{
-            ObjectIdentifier = $ComputerDomainSID
+            ObjectIdentifier = $thisComputerDomainSID
             Properties = @{
-                name = $ComputerFQDN
+                name = $thisComputerFQDN
             }
             Sessions = $sessions | Sort-Object -Unique
             UserRights = $userRights
@@ -249,11 +293,11 @@ $output = @{
     }
 }
 
-if ($OutputParam -eq "stdout") {
+if ($outputParam -eq "stdout") {
     $output | ConvertTo-Json -Depth 6 -Compress
 } else {
-    $output | ConvertTo-Json -Depth 6 -Compress | Out-File $OutputParam
+    $output | ConvertTo-Json -Depth 6 -Compress | Out-File $outputParam
 }
 
 # End logging
-if ($LogParam -ne "none") {$ts = (Get-Date).ToUniversalTime(); "$ts UTC - FETCH execution completed" | Out-File -FilePath $LogParam -Append}
+if ($logParam -ne "none") {$ts = (Get-Date).ToUniversalTime(); "$ts UTC - FETCH execution completed" | Out-File -FilePath $logParam -Append}
