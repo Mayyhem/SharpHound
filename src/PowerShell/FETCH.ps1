@@ -62,7 +62,7 @@ try {
 
     # Collect local system domain computer account SID via LDAP
     $thisComputerName = $env:COMPUTERNAME
-    $thisComputerDomainAccount = New-Object System.Security.Principal.NTAccount($thisComputerName + "$")
+    $thisComputerDomainAccount = New-Object System.Security.Principal.NTAccount("${thisComputerName}$")
     $thisComputerDomainSID = $thisComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
 
     # Collect local system FQDN
@@ -78,90 +78,94 @@ try {
     foreach ($eventID in $eventIDs) {
         # Enumerate logon events in the specified window
         $events = Get-WinEvent -FilterHashtable @{Logname='Security';ID=$eventID;StartTime=$sessionLookbackStartDate}
+
         foreach ($event in $events) {
             $eventXML = [xml]$event.ToXml()
             $eventData = $eventXML.Event.EventData.Data
 
-            if ($eventID -eq "4624") {
-                # Initialize fields to use to filter log data
-                $logonType = $eventData | Where-Object { $_.Name -eq 'LogonType' } | Select-Object -ExpandProperty '#text'
-                $sourceIPAddress = $eventData | Where-Object { $_.Name -eq 'IpAddress' } | Select-Object -ExpandProperty '#text'
-                $targetUserSID = $eventData | Where-Object { $_.Name -eq 'TargetUserSid' } | Select-Object -ExpandProperty '#text'
+            switch ($eventID) {
+
+                4624 {
+                    # Initialize fields to use to filter log data
+                    $logonType = $eventData | Where-Object { $_.Name -eq 'LogonType' } | Select-Object -ExpandProperty '#text'
+                    $sourceIPAddress = $eventData | Where-Object { $_.Name -eq 'IpAddress' } | Select-Object -ExpandProperty '#text'
+                    $targetUserSID = $eventData | Where-Object { $_.Name -eq 'TargetUserSid' } | Select-Object -ExpandProperty '#text'
                 
-                # Collect domain user logon sessions
-                if ($targetUserSID -like "S-1-5-21-*") {
+                    # Collect domain user logon sessions
+                    if ($targetUserSID -like "S-1-5-21-*") {
          
-                    # Collect sessions initiated from remote hosts (Logon Type 3: Network)
-                    if ($sourceIPAddress) {
+                        # Collect sessions initiated from remote hosts (Logon Type 3: Network)
+                        if ($sourceIPAddress) {
        
-                        # Resolve the source IP address to a hostname, discarding non-terminating errors (failed resolution)
-                        $sourceComputerName = Resolve-DnsName -Name $sourceIPAddress -Type PTR 2>$null
+                            # Resolve the source IP address to a hostname, discarding non-terminating errors (failed resolution)
+                            $sourceComputerName = Resolve-DnsName -Name $sourceIPAddress -Type PTR 2>$null
 
-                        # Translate the hostname to a domain SID
-                        if ($sourceComputerName) {
-                            $sourceComputerDomainAccount = New-Object System.Security.Principal.NTAccount($sourceComputerName.NameHost.Split(".")[0] + "$")
+                            # Translate the hostname to a domain SID
+                            if ($sourceComputerName) {
+                                $sourceComputerDomainAccount = New-Object System.Security.Principal.NTAccount($sourceComputerName.NameHost.Split(".")[0] + "$")
+                            }
+
+                            if ($sourceComputerDomainAccount) {
+                                $sourceComputerDomainSID = $sourceComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+                            }
+                        }
+                        # Collect local logon sessions on this host
+                        else {
+                            $sourceComputerDomainSID = $thisComputerDomainSID
                         }
 
-                        if ($sourceComputerDomainAccount) {
-                            $sourceComputerDomainSID = $sourceComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+                        # Create a record for this domain user session
+                        $newSession = @{
+                            UserSID = $targetUserSID
+                            ComputerSID = $sourceComputerDomainSID
+                            LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
                         }
-                    }
-                    # Collect local logon sessions on this host
-                    else {
-                        $sourceComputerDomainSID = $thisComputerDomainSID
-                    }
 
-                    # Create a record for this domain user session
-                    $newSession = @{
-                        UserSID = $targetUserSID
-                        ComputerSID = $sourceComputerDomainSID
-                        LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
-                    }
+                        # Check if a session with the same UserSID and ComputerSID already exists
+                        $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserSID -and $_.ComputerSID -eq $sourceComputerDomainSID }
 
-                    # Check if a session with the same UserSID and ComputerSID already exists
-                    $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserSID -and $_.ComputerSID -eq $sourceComputerDomainSID }
-
-                    if ($existingSession) {
-                        # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
-                        if ($newSession.LastSeen -gt $existingSession.LastSeen) {
-                            $existingSession.LastSeen = $newSession.LastSeen
+                        if ($existingSession) {
+                            # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
+                            if ($newSession.LastSeen -gt $existingSession.LastSeen) {
+                                $existingSession.LastSeen = $newSession.LastSeen
+                            }
+                        } else {
+                            # If no session with the same UserSID and ComputerSID is found, add the session to the script output
+                            $logonEventResults += $newSession
                         }
-                    } else {
-                        # If no session with the same UserSID and ComputerSID is found, add the session to the script output
-                        $logonEventResults += $newSession
                     }
                 }
 
-            } elseif ($eventID -eq "4648") {
+                4648 {
+                    # Initialize fields to use to filter log data
+                    $targetUserName = $eventData | Where-Object { $_.Name -eq 'TargetUserName' } | Select-Object -ExpandProperty '#text'
+                    $targetDomainName = $eventData | Where-Object { $_.Name -eq 'TargetDomainName' } | Select-Object -ExpandProperty '#text'
 
-                # Initialize fields to use to filter log data
-                $targetUserName = $eventData | Where-Object { $_.Name -eq 'TargetUserName' } | Select-Object -ExpandProperty '#text'
-                $targetDomainName = $eventData | Where-Object { $_.Name -eq 'TargetDomainName' } | Select-Object -ExpandProperty '#text'
+                    # Convert TargetUserName and TargetDomainName to domain SID
+                    $targetUserDomainAccount = New-Object System.Security.Principal.NTAccount("$targetDomainName\$targetUserName")
+                    $targetUserDomainSID = $targetUserDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
 
-                # Convert TargetUserName and TargetDomainName to domain SID
-                $targetUserDomainAccount = New-Object System.Security.Principal.NTAccount("$targetDomainName\$targetUserName")
-                $targetUserDomainSID = $targetUserDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
-
-                # Collect domain user logon sessions on this host that did not originate from SYSTEM
-                if ($targetUserDomainSID -like "S-1-5-21-*" -and $targetUserDomainSID -ne $thisComputerDomainSID) {
-                    # Create a record for this domain user session
-                    $newSession = @{
-                        UserSID = $targetUserDomainSID
-                        ComputerSID = $thisComputerDomainSID
-                        LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
-                    }
-
-                    # Check if a session with the same UserSID and ComputerSID already exists
-                    $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserDomainSID -and $_.ComputerSID -eq $thisComputerDomainSID }
-
-                    if ($existingSession) {
-                        # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
-                        if ($newSession.LastSeen -gt $existingSession.LastSeen) {
-                            $existingSession.LastSeen = $newSession.LastSeen
+                    # Collect domain user logon sessions on this host that did not originate from SYSTEM
+                    if ($targetUserDomainSID -like "S-1-5-21-*" -and $targetUserDomainSID -ne $thisComputerDomainSID) {
+                        # Create a record for this domain user session
+                        $newSession = @{
+                            UserSID = $targetUserDomainSID
+                            ComputerSID = $thisComputerDomainSID
+                            LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
                         }
-                    } else {
-                        # If no session with the same UserSID and ComputerSID is found, add the session to the script output
-                        $logonEventResults += $newSession
+
+                        # Check if a session with the same UserSID and ComputerSID already exists
+                        $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserDomainSID -and $_.ComputerSID -eq $thisComputerDomainSID }
+
+                        if ($existingSession) {
+                            # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
+                            if ($newSession.LastSeen -gt $existingSession.LastSeen) {
+                                $existingSession.LastSeen = $newSession.LastSeen
+                            }
+                        } else {
+                            # If no session with the same UserSID and ComputerSID is found, add the session to the script output
+                            $logonEventResults += $newSession
+                        }
                     }
                 }
             }
@@ -263,7 +267,9 @@ try {
     }
 
 } catch {
-    if ($logParam -ne "none") {$ts = (Get-Date).ToUniversalTime(); "$ts UTC - FETCH encountered an error: $($_.Exception.Message)" | Out-File -FilePath $logParam -Append}
+    if ($logParam -ne "none") {
+        "$((Get-Date).ToUniversalTime()) UTC - FETCH encountered an error at line $_.InvocationInfo.ScriptLineNumber: $($_.Exception.Message)" | Out-File -FilePath $logParam -Append
+    }
 }
 
 <#
