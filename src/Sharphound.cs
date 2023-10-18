@@ -491,7 +491,7 @@ namespace Sharphound
                     // SCCM collection
                     if (!string.IsNullOrEmpty(options.SccmServer) && !string.IsNullOrEmpty(options.SccmSiteCode) && !string.IsNullOrEmpty(options.SccmCollectionId))
                     {
-                        JToken cmPivotResponse = await SCCMCollector.Collect(options.SccmServer, options.SccmSiteCode, $"FileContent('{options.FetchResultsFile}')", options.SccmCollectionId, null, new string[] { "10", "5" }, true);
+                        JToken cmPivotResponse = await Fetch.Collect(options.SccmServer, options.SccmSiteCode, options.SccmCollectionId, options.FetchResultsFile, options.FetchTimeout);
                         if (cmPivotResponse != null)
                         {
                             APIIngest.SendIt(cmPivotResponse);

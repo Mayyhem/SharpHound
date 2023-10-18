@@ -302,8 +302,8 @@ namespace Sharphound
 
             // Proxy settings
             var httpHandler = new HttpClientHandler();
-            var trustAllCerts = new TrustAllCertsPolicy();
-            ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
+            //var trustAllCerts = new TrustAllCertsPolicy();
+            //ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
             //httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
 
             // Signer
@@ -435,9 +435,9 @@ namespace Sharphound
 
             // Proxy settings
             var httpHandler = new HttpClientHandler();
-            var trustAllCerts = new TrustAllCertsPolicy();
-            ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
-            httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
+            //var trustAllCerts = new TrustAllCertsPolicy();
+            //ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
+            //httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
 
             // Signer
             var authHandler = new AuthSigner(ingestCredentials.TokenKey, ingestCredentials.TokenId, httpHandler);
@@ -509,9 +509,9 @@ namespace Sharphound
             var httpHandler = new HttpClientHandler();
 
             // Proxy settings
-            var trustAllCerts = new TrustAllCertsPolicy();
-            ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
-            httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
+            //var trustAllCerts = new TrustAllCertsPolicy();
+            //ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
+            //httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
 
             // Auth handler
             var authHandler = new AuthSigner(adminCredentials.TokenKey, adminCredentials.TokenId, httpHandler);
@@ -544,7 +544,7 @@ namespace Sharphound
                 // Parse the "Content" property value for each "Line" as a JObject
                 JObject parsedContent = JObject.Parse(lineData.Content);
 
-                // Update the "version" attribute in the "meta" object to 6 so BHE doesn't ignore sessions and local groups
+                // Update the "version" attribute in the "meta" object to 5
                 Console.WriteLine($"[*] Setting meta version");
                 if (parsedContent["meta"] is JObject metaObject)
                 {

@@ -13,7 +13,7 @@ using System.Text.RegularExpressions;
 using System.Security.Cryptography.X509Certificates;
 using System.Management;
 
-namespace Sharphound
+namespace Sharphoundx
 {
 
     public class SCCMCollector

@@ -112,7 +112,10 @@ namespace Sharphound
         
         [Option(HelpText = "Timeout for port checks in milliseconds", Default = 500)]
         public int PortCheckTimeout { get; set; }
-        
+
+        [Option(HelpText = "Timeout for SCCM to collect FETCH results in minutes", Default = 0)]
+        public int FetchTimeout { get; set; }
+
         [Option(HelpText = "Skip check for PwdLastSet when enumerating computers", Default = false)]
         public bool SkipPasswordCheck { get; set; }
 

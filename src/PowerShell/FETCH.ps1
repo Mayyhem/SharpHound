@@ -10,12 +10,6 @@ Purpose:
 -------------------------------------------
 #>
 
-
-<#
--------------------------------------------
-Command line options for output and logging
--------------------------------------------
-#>
 param(
     # Validate that the log file path exists or is set to "none" (default: "C:\Windows\CCM\ScriptStore\FetchExecution.log")
     [ValidateScript({
