@@ -494,7 +494,7 @@ namespace Sharphound
                         JToken cmPivotResponse = await Fetch.Collect(options.SccmServer, options.SccmSiteCode, options.SccmCollectionId, options.FetchResultsFile, options.FetchTimeout);
                         if (cmPivotResponse != null)
                         {
-                            APIIngest.SendIt(cmPivotResponse);
+                            await APIClient.SendItAsync(cmPivotResponse);
                         }
                         else
                         {

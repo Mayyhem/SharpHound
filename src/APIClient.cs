@@ -30,21 +30,69 @@ namespace Sharphound
             _credentials = credentials;
             _userAgent = userAgent;
         }
-
-        private string FormatUrl(string uri)
+        public static APIClient InitializeAPIClient(string TOKEN_ID, string TOKEN_KEY, string SCHEME, string DOMAIN, int PORT)
         {
-            string formattedUri = uri;
-            if (uri.StartsWith("/"))
-            {
-                formattedUri = formattedUri.Substring(1);
-            }
+            // Initialize Credentials
+            Credentials adminCredentials = new Credentials(TOKEN_ID, TOKEN_KEY);
 
-            return $"{_scheme}://{_host}:{_port}/{formattedUri}";
+            // Initialize HTTP client handler
+            var httpHandler = new HttpClientHandler();
+
+            // Proxy settings
+            //var trustAllCerts = new TrustAllCertsPolicy();
+            //ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
+            //httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
+
+            // Initialize authentication handler
+            var authHandler = new AuthSigner(adminCredentials.TokenKey, adminCredentials.TokenId, httpHandler);
+
+            // Initialize HttpClient
+            var client = new HttpClient(authHandler);
+
+            // Initialize User Agent Header
+            var header = new ProductHeaderValue("sharphound",
+                Assembly.GetExecutingAssembly().GetName().Version.ToString());
+            client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(header));
+
+            // Initialize and return APIClient
+            return new APIClient(client, SCHEME, DOMAIN, PORT, adminCredentials);
         }
 
-        private Task<HttpRequestMessage> CreateRequestMessageAsync(string method, string uri, byte[] body = null)
+        public static void LoadEnvVariablesFromFile()
         {
-            var request = new HttpRequestMessage(new HttpMethod(method), FormatUrl(uri));
+            string basePath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string envFilePath = Path.Combine(basePath, ".env");
+
+            if (File.Exists(envFilePath))
+            {
+                foreach (string line in File.ReadAllLines(envFilePath))
+                {
+                    string[] parts = line.Split(new[] { '=' }, 2, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length == 2)
+                    {
+                        string key = parts[0].Trim();
+                        string value = parts[1].Trim();
+                        Environment.SetEnvironmentVariable(key, value);
+                    }
+                }
+            }
+        }
+
+        public static void LoadSpecificEnvVariables(out string DOMAIN, out int PORT, out string SCHEME, out string SHARPHOUND_USER_AGENT, out string SHARPHOUND_CLIENT_NAME, out string TOKEN_ID, out string TOKEN_KEY)
+        {
+            DOMAIN = Environment.GetEnvironmentVariable("DOMAIN");
+            int.TryParse(Environment.GetEnvironmentVariable("PORT"), out PORT);
+            SCHEME = Environment.GetEnvironmentVariable("SCHEME");
+            SHARPHOUND_USER_AGENT = Environment.GetEnvironmentVariable("SHARPHOUND_USER_AGENT");
+            SHARPHOUND_CLIENT_NAME = Environment.GetEnvironmentVariable("SHARPHOUND_CLIENT_NAME");
+            TOKEN_ID = Environment.GetEnvironmentVariable("TOKEN_ID");
+            TOKEN_KEY = Environment.GetEnvironmentVariable("TOKEN_KEY");
+        }
+
+        private HttpRequestMessage CreateRequestMessage(string method, string uri, byte[] body = null)
+        {
+            var formattedUri = uri.StartsWith("/") ? uri.Substring(1) : uri;
+            var request = new HttpRequestMessage(new HttpMethod(method), $"{_scheme}://{_host}:{_port}/{formattedUri}");
 
             if (body != null)
             {
@@ -53,7 +101,8 @@ namespace Sharphound
             }
 
             request.Headers.Add("User-Agent", _userAgent);
-            return Task.FromResult(request);
+
+            return request;
         }
 
         private async Task<HttpResponseMessage> SendRequestAsync(HttpRequestMessage request)
@@ -71,16 +120,25 @@ namespace Sharphound
             };
 
             var body = JsonConvert.SerializeObject(data);
-            var request = CreateRequestMessageAsync("POST", "/api/v2/clients", Encoding.UTF8.GetBytes(body));
+            var request = CreateRequestMessage("POST", "/api/v2/clients", Encoding.UTF8.GetBytes(body));
 
-            var response = await SendRequestAsync(await request);
+            Console.WriteLine("[*] Creating SharpHound client: " + name);
+            var response = await SendRequestAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
             return JObject.Parse(responseContent);
         }
 
-        public async Task<HttpResponseMessage> CreateJobAsync(string clientId, bool adStructureCollection = false, bool allTrustedDomains = false,
-            string[] domains = default, bool localGroupCollection = false, string[] ous = default, bool sessionCollection = false)
+        public async Task<HttpResponseMessage> CreateJobAsync(APIClient adminAPIClient, JToken sharpHoundClient)
         {
+            // Set up the job data
+            bool adStructureCollection = true;
+            bool localGroupCollection = true;
+            bool sessionCollection = true;
+            bool allTrustedDomains = false; 
+            string[] domains = default;
+            string[] ous = default;
+
+            // Prepare the data
             var data = new
             {
                 ad_structure_collection = adStructureCollection,
@@ -91,10 +149,20 @@ namespace Sharphound
                 session_collection = sessionCollection
             };
 
+            // Serialize to JSON
             var body = JsonConvert.SerializeObject(data);
-            var request = CreateRequestMessageAsync("POST", $"/api/v2/clients/{clientId}/jobs", Encoding.UTF8.GetBytes(body));
 
-            return await SendRequestAsync(await request);
+            // Create the HTTP request
+            var request = CreateRequestMessage("POST", $"/api/v2/clients/{sharpHoundClient["id"]}/jobs", Encoding.UTF8.GetBytes(body));
+
+            // Send the request
+            Console.WriteLine("[*] Creating job for SharpHound client");
+            HttpResponseMessage response = await adminAPIClient.SendRequestAsync(request);
+
+            // Output the response
+            Console.WriteLine($"[*] Response: {response}");
+
+            return response;
         }
 
         public async Task<HttpResponseMessage> EndJobAsync()
@@ -106,16 +174,17 @@ namespace Sharphound
             };
 
             var body = JsonConvert.SerializeObject(data);
-            var request = CreateRequestMessageAsync("POST", "/api/v2/jobs/end", Encoding.UTF8.GetBytes(body));
+            var request = CreateRequestMessage("POST", "/api/v2/jobs/end", Encoding.UTF8.GetBytes(body));
 
-            return await SendRequestAsync(await request);
+            Console.WriteLine("[*] Marking job as done");
+            return await SendRequestAsync(request);
         }
 
         public async Task<JObject> GetClientsAsync()
         {
-            var request = CreateRequestMessageAsync("GET", "/api/v2/clients");
+            var request = CreateRequestMessage("GET", "/api/v2/clients");
 
-            var response = await SendRequestAsync(await request);
+            var response = await SendRequestAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
             Console.WriteLine(responseContent);
             return JObject.Parse(responseContent);
@@ -123,9 +192,10 @@ namespace Sharphound
 
         public async Task<JObject> GetNewClientTokenAsync(string clientId)
         {
-            var request = CreateRequestMessageAsync("PUT", $"/api/v2/clients/{clientId}/token");
+            var request = CreateRequestMessage("PUT", $"/api/v2/clients/{clientId}/token");
 
-            var response = await SendRequestAsync(await request);
+            Console.WriteLine("[*] Generating new API token for SharpHound client");
+            var response = await SendRequestAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
             Console.WriteLine(responseContent);
             return JObject.Parse(responseContent);
@@ -133,19 +203,22 @@ namespace Sharphound
 
         public async Task<JArray> GetJobsAsync()
         {
-            var request = CreateRequestMessageAsync("GET", "/api/v2/jobs/available");
+            var request = CreateRequestMessage("GET", "/api/v2/jobs/available");
 
-            var response = await SendRequestAsync(await request);
+            Console.WriteLine("[*] Get jobs for SharpHound client");
+            var response = await SendRequestAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
             Console.WriteLine(responseContent);
+
             return (JArray)JObject.Parse(responseContent)["data"];
         }
 
         public async Task<HttpResponseMessage> PostIngestAsync(byte[] body)
         {
-            var request = CreateRequestMessageAsync("POST", "/api/v2/ingest", body);
+            var request = CreateRequestMessage("POST", "/api/v2/ingest", body);
 
-            return await SendRequestAsync(await request);
+            Console.WriteLine($"[*] Sending FETCH data to API for ingestion");
+            return await SendRequestAsync(request);
         }
 
         public async Task<HttpResponseMessage> StartJobAsync(int jobId)
@@ -156,164 +229,89 @@ namespace Sharphound
             };
 
             var body = JsonConvert.SerializeObject(data);
-            var request = CreateRequestMessageAsync("POST", "/api/v2/jobs/start", Encoding.UTF8.GetBytes(body));
+            var request = CreateRequestMessage("POST", "/api/v2/jobs/start", Encoding.UTF8.GetBytes(body));
 
-            return await SendRequestAsync(await request);
+            Console.WriteLine("[*] Starting job with ID: " + jobId);
+            return await SendRequestAsync(request);
         }
-    }
 
-    public class Credentials
-    {
-        public string TokenId { get; }
-        public string TokenKey { get; }
-
-        public Credentials(string tokenId, string tokenKey)
+        public static async Task<JToken> CheckIfSharpHoundClientExists(APIClient adminClient, string sharpHoundClientName)
         {
-            TokenId = tokenId;
-            TokenKey = tokenKey;
-        }
-    }
+            Console.WriteLine("[*] Checking if SharpHound client " + sharpHoundClientName + " exists");
+            JObject getClientsResponse = await adminClient.GetClientsAsync();
+            JArray clients = (JArray)getClientsResponse["data"];
 
-    public class APIIngest
-    {
-        public static async Task IngestDataFromJSON(APIClient adminClient, Credentials adminCredentials, string ingestClientName, string userAgent, JObject jsonToIngest, string BHE_DOMAIN, string SCHEME, int PORT)
-        {
-            // Check if ingest client specified in env already exists
-            JToken ingestClient = null;
-            Console.WriteLine("[*] Checking if ingest client " + ingestClientName + " exists");
-            JObject getApiClientsResponse = await adminClient.GetClientsAsync();
-            JArray apiClients = (JArray)getApiClientsResponse["data"];
-
-            foreach (JObject apiClient in apiClients)
+            foreach (JObject client in clients)
             {
-                if (apiClient["name"] != null && apiClient["name"].ToString() == ingestClientName)
+                if (client["name"] != null && client["name"].ToString() == sharpHoundClientName)
                 {
-                    ingestClient = apiClient;
-                    break;
+                    Console.WriteLine("[*] SharpHound client named " + sharpHoundClientName + " found!");
+                    return client;
                 }
             }
+            Console.WriteLine("[*] SharpHound client named " + sharpHoundClientName + " not found");
+            return null;
+        }
 
-            if (ingestClient != null)
-            {
-                Console.WriteLine("[*] Ingest client named " + ingestClientName + " found!");
-
-                // Generate new API token
-                Console.WriteLine("[*] Generating new API token for ingest client");
-                JObject newToken = await adminClient.GetNewClientTokenAsync(ingestClient["id"].ToString());
-                ingestClient["token"] = newToken;
-            }
-            else
-            {
-                Console.WriteLine("[*] Ingest client named " + ingestClientName + " not found");
-
-                // Create ingest client
-                Console.WriteLine("[*] Creating ingest client: " + ingestClientName);
-                string clientType = "sharphound";
-                JObject createdClient = await adminClient.CreateClientAsync(ingestClientName, clientType);
-                ingestClient = createdClient["data"] as JObject;
-            }
-
-            // Create job for ingest client
-            Console.WriteLine("[*] Creating job for client");
-            JObject jobData = new JObject();
-            jobData["ad_structure_collection"] = true;
-            jobData["local_group_collection"] = true;
-            jobData["session_collection"] = true;
-
-            HttpResponseMessage response = await adminClient.CreateJobAsync(ingestClient["id"].ToString(), jobData.Value<bool>("ad_structure_collection"),
-                jobData.Value<bool>("all_trusted_domains"), jobData["domains"]?.ToObject<string[]>(), jobData.Value<bool>("local_group_collection"),
-                jobData["ous"]?.ToObject<string[]>(), jobData.Value<bool>("session_collection"));
-            Console.WriteLine($"[*] Response: {response}");
-
-            // Create ingest BHE client
-            Credentials ingestCredentials = new Credentials(ingestClient["token"]["data"]["id"].ToString(), ingestClient["token"]["data"]["key"].ToString());
-
-            // Proxy settings
+        public static APIClient InitializeIngestClient(Credentials ingestCredentials, string SCHEME, string BHE_DOMAIN, int PORT, string userAgent)
+        {
             var httpHandler = new HttpClientHandler();
-            //var trustAllCerts = new TrustAllCertsPolicy();
-            //ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
-            //httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
-
-            // Signer
             var authHandler = new AuthSigner(ingestCredentials.TokenKey, ingestCredentials.TokenId, httpHandler);
             var client = new HttpClient(authHandler);
-            APIClient signedIngestClient = new APIClient(client, SCHEME, BHE_DOMAIN, PORT, ingestCredentials, userAgent);
+            return new APIClient(client, SCHEME, BHE_DOMAIN, PORT, ingestCredentials, userAgent);
+        }
 
-            // Get jobs
-            Console.WriteLine("[*] Get jobs for client");
+        public static async Task<HttpResponseMessage> StartNextJob(APIClient signedIngestClient)
+        {
             JArray jobs = await signedIngestClient.GetJobsAsync();
             if (jobs.Count == 0)
             {
                 Console.WriteLine("[!] No jobs. Schedule an on-demand scan for client and run the script again.");
-                return;
+                return null;
             }
-
-            // Tell BHE we are starting the next job
             JObject nextJob = jobs[0] as JObject;
-            Console.WriteLine("[*] Starting next job with ID: " + nextJob["id"]);
-            response = await signedIngestClient.StartJobAsync((int)nextJob["id"]);
-            Console.WriteLine($"[*] Response: {response}");
-
-            // Load JSON file
-            Console.WriteLine($"[*] Ingesting FETCH data");
-
-            // Ingest data
-            response = await signedIngestClient.PostIngestAsync(Encoding.UTF8.GetBytes(jsonToIngest.ToString(Formatting.None)));
-            Console.WriteLine($"[*] Response: {response}");
-
-
-            // Mark job as complete
-            Console.WriteLine("[*] Marking job as done");
-            response = await signedIngestClient.EndJobAsync();
-            Console.WriteLine($"[*] Response: {response}");
+            return await signedIngestClient.StartJobAsync((int)nextJob["id"]);
         }
 
-        public static void SendIt(JToken BloodHoundData)
+        public static async Task SendItAsync(JToken BloodHoundData)
         {
             // Get environment variables from %USERPROFILE%\.env
-            string basePath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            string envFilePath = Path.Combine(basePath, ".env");
+            LoadEnvVariablesFromFile();
+            LoadSpecificEnvVariables(out string DOMAIN, out int PORT, out string SCHEME, out string SHARPHOUND_USER_AGENT, out string SHARPHOUND_CLIENT_NAME, out string TOKEN_ID, out string TOKEN_KEY);
 
-            if (File.Exists(envFilePath))
+            // Initialize API client using admin token
+            APIClient adminAPIClient = InitializeAPIClient(TOKEN_ID, TOKEN_KEY, SCHEME, DOMAIN, PORT);
+
+            // Check if a SharpHound ingest client exists and get a token for it, otherwise create one
+            JToken sharpHoundClient = await CheckIfSharpHoundClientExists(adminAPIClient, SHARPHOUND_CLIENT_NAME);
+
+            if (sharpHoundClient != null)
             {
-                foreach (string line in File.ReadAllLines(envFilePath))
-                {
-                    string[] parts = line.Split(new[] { '=' }, 2, StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length == 2)
-                    {
-                        string key = parts[0].Trim();
-                        string value = parts[1].Trim();
-                        Environment.SetEnvironmentVariable(key, value);
-                    }
-                }
+                JObject newTokenForExistingClient = await adminAPIClient.GetNewClientTokenAsync(sharpHoundClient["id"].ToString());
+                sharpHoundClient["token"] = newTokenForExistingClient;
+            }
+            else
+            {
+                JObject createdClient = await adminAPIClient.CreateClientAsync(SHARPHOUND_CLIENT_NAME, "sharphound");
+                sharpHoundClient = createdClient["data"] as JObject;
             }
 
-            // Load environment variables
-            string DOMAIN = Environment.GetEnvironmentVariable("DOMAIN");
-            int PORT = new int();
-            int.TryParse(Environment.GetEnvironmentVariable("PORT"), out PORT); 
-            string SCHEME = Environment.GetEnvironmentVariable("SCHEME");
-            string SHARPHOUND_USER_AGENT = Environment.GetEnvironmentVariable("SHARPHOUND_USER_AGENT");
-            string SHARPHOUND_CLIENT_NAME = Environment.GetEnvironmentVariable("SHARPHOUND_CLIENT_NAME");
-            string TOKEN_ID = Environment.GetEnvironmentVariable("TOKEN_ID");
-            string TOKEN_KEY = Environment.GetEnvironmentVariable("TOKEN_KEY");
+            // Create job for SharpHound client
+            HttpResponseMessage response = await adminAPIClient.CreateJobAsync(adminAPIClient, sharpHoundClient);
 
-            // Create API client
-            Credentials adminCredentials = new Credentials(TOKEN_ID, TOKEN_KEY);
-            var httpHandler = new HttpClientHandler();
+            // Create API client for SharpHound client
+            Credentials sharpHoundClientCreds = new Credentials(sharpHoundClient["token"]["data"]["id"].ToString(), sharpHoundClient["token"]["data"]["key"].ToString());
+            APIClient sharpHoundAPIClientSigned = InitializeAPIClient(sharpHoundClientCreds.TokenId, sharpHoundClientCreds.TokenKey, SCHEME, DOMAIN, PORT);
 
-            // Proxy settings
-            //var trustAllCerts = new TrustAllCertsPolicy();
-            //ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
-            //httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
-
-            // Auth handler
-            var authHandler = new AuthSigner(adminCredentials.TokenKey, adminCredentials.TokenId, httpHandler);
-            var client = new HttpClient(authHandler);
-            var header = new ProductHeaderValue("sharphound",
-                Assembly.GetExecutingAssembly().GetName().Version.ToString());
-            client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(header));
-            APIClient adminClient = new APIClient(client, SCHEME, DOMAIN, PORT, adminCredentials);
+            // Get the job we created and start it
+            JArray jobs = await sharpHoundAPIClientSigned.GetJobsAsync();
+            if (jobs.Count == 0)
+            {
+                Console.WriteLine("[!] No jobs found");
+                return;
+            }
+            JObject nextJob = jobs[0] as JObject;
+            response = await sharpHoundAPIClientSigned.StartJobAsync((int)nextJob["id"]);
 
             // Prepare data
             JObject obj = BloodHoundData.ToObject<JObject>();
@@ -329,9 +327,7 @@ namespace Sharphound
                 })
                 .ToList();
 
-            // Create a new JObject to store the extracted content
-            JObject contentAsJObject = new JObject();
-
+            // Add each device to the job
             foreach (var lineData in result)
             {
                 // Parse the "Content" property value for each "Line" as a JObject
@@ -343,11 +339,25 @@ namespace Sharphound
                 {
                     metaObject["version"] = 5;
                 }
-                IngestDataFromJSON(adminClient, adminCredentials, SHARPHOUND_CLIENT_NAME, SHARPHOUND_USER_AGENT, parsedContent, DOMAIN, SCHEME, PORT).Wait();
 
-                // Add the parsed content to the result JObject, using the "Line" number as the key
-                contentAsJObject[lineData.Line] = parsedContent;
+                // Send data to ingest
+                response = await sharpHoundAPIClientSigned.PostIngestAsync(Encoding.UTF8.GetBytes(parsedContent.ToString(Formatting.None)));
             }
+
+            // Mark the job as done so the ingest API scoops it up
+            response = await sharpHoundAPIClientSigned.EndJobAsync();
+        }
+    }
+
+    public class Credentials
+    {
+        public string TokenId { get; }
+        public string TokenKey { get; }
+
+        public Credentials(string tokenId, string tokenKey)
+        {
+            TokenId = tokenId;
+            TokenKey = tokenKey;
         }
     }
 
