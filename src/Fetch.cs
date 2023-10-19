@@ -11,16 +11,15 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 
 namespace Sharphound
 {
     public class Fetch
     {
-        public static async Task<JToken> QueryAdminService(string smsProvider, string sitecode, string collectionId, string fetchResultsFile, int fetchTimeout)
+        public static async Task<JToken> QueryAdminService(string smsProvider, string siteCode, string collectionId, string fetchResultsFile, int fetchTimeout)
         {
-            int operationId = GetOperationIdForQuery(smsProvider, sitecode, collectionId, fetchResultsFile);
+            int operationId = GetOperationIdForQuery(smsProvider, siteCode, collectionId, fetchResultsFile);
 
             if (operationId != 0)
             {
@@ -88,9 +87,9 @@ namespace Sharphound
             return null;
         }
 
-        public static async Task<JToken> Collect(string smsProvider, string sitecode, string collectionId, string fetchResultsFile, int fetchTimeout = 0)
+        public static async Task<JToken> Collect(string smsProvider, string siteCode, string collectionId, string fetchResultsFile, int fetchTimeout = 0)
         {
-            var cmPivotData = await QueryAdminService(smsProvider, sitecode, collectionId, fetchResultsFile, fetchTimeout);
+            var cmPivotData = await QueryAdminService(smsProvider, siteCode, collectionId, fetchResultsFile, fetchTimeout);
             if (cmPivotData != null)
             {
                 Console.WriteLine("\r" + cmPivotData.ToString() + "\r");
@@ -98,87 +97,76 @@ namespace Sharphound
             return cmPivotData;
         }
 
-        public static int InitiateClientOperationExMethodCall(string query, string smsProvider, string CollectionName, string deviceId)
+        public static int InitiateClientOperationExMethodCall(string query, string smsProvider, string collectionId, string deviceId, string siteCode)
         {
             try
             {
                 // Get the SMS_ClientOperation WMI class
-                ManagementScope scope = NewWmiConnection(smsProvider, null);
+                ManagementScope scope = NewWmiConnection(smsProvider, @$"root\SMS\site_{siteCode}");
                 ManagementClass clientOperationClass = new ManagementClass(scope, new ManagementPath("SMS_ClientOperation"), null);
 
                 //Prepare the content of the Param Parameter for the method call
-                var plainTextBytes = Encoding.UTF8.GetBytes(query);
-                string base64 = Convert.ToBase64String(plainTextBytes);
-                string ParametersXML = $"<ScriptParameters><ScriptParameter ParameterGroupGuid=\"\" ParameterGroupName=\"PG_\" ParameterName=\"kustoquery\" ParameterDataType=\"System.String\" ParameterVisibility=\"0\" ParameterType=\"0\" ParameterValue=\"E:RSgwKQ==\"/><ScriptParameter ParameterGroupGuid=\"\" ParameterGroupName=\"PG_\" ParameterName=\"select\" ParameterDataType=\"System.String\" ParameterVisibility=\"0\" ParameterType=\"0\" ParameterValue=\"E:RGV2aWNlOkRldmljZSxMaW5lOk51bWJlcixDb250ZW50OlN0cmluZw==\"/><ScriptParameter ParameterGroupGuid=\"\" ParameterGroupName=\"PG_\" ParameterName=\"wmiquery\" GroupClass=\"\" ParameterDataType=\"System.String\" ParameterVisibility=\"0\" ParameterType=\"0\" ParameterValue=\"E:{base64}\"/></ScriptParameters>";
+                var queryPlainTextBytes = Encoding.UTF8.GetBytes(query);
+                string queryBase64 = Convert.ToBase64String(queryPlainTextBytes);
+                string parametersXML = $"<ScriptParameters><ScriptParameter ParameterGroupGuid=\"\" ParameterGroupName=\"PG_\" ParameterName=\"kustoquery\" ParameterDataType=\"System.String\" ParameterVisibility=\"0\" ParameterType=\"0\" ParameterValue=\"E:RSgwKQ==\"/><ScriptParameter ParameterGroupGuid=\"\" ParameterGroupName=\"PG_\" ParameterName=\"select\" ParameterDataType=\"System.String\" ParameterVisibility=\"0\" ParameterType=\"0\" ParameterValue=\"E:RGV2aWNlOkRldmljZSxMaW5lOk51bWJlcixDb250ZW50OlN0cmluZw==\"/><ScriptParameter ParameterGroupGuid=\"\" ParameterGroupName=\"PG_\" ParameterName=\"wmiquery\" GroupClass=\"\" ParameterDataType=\"System.String\" ParameterVisibility=\"0\" ParameterType=\"0\" ParameterValue=\"E:{queryBase64}\"/></ScriptParameters>";
                 SHA256 SHA256 = new SHA256Cng();
-                byte[] Bytes = SHA256.ComputeHash(Encoding.Unicode.GetBytes(ParametersXML));
-                string ParametersHash = string.Join("", Bytes.Select(b => b.ToString("X2"))).ToLower();
-                string xml = "<ScriptContent ScriptGuid='7DC6B6F1-E7F6-43C1-96E0-E1D16BC25C14'>" +
+                byte[] parametersBytes = SHA256.ComputeHash(Encoding.Unicode.GetBytes(parametersXML));
+                string parametersHash = string.Join("", parametersBytes.Select(b => b.ToString("X2"))).ToLower();
+                string contentXml = "" +
+                            "<ScriptContent ScriptGuid='7DC6B6F1-E7F6-43C1-96E0-E1D16BC25C14'>" +
                                 "<ScriptVersion>1</ScriptVersion>" +
                                 "<ScriptType>0</ScriptType>" +
                                 "<ScriptHash ScriptHashAlg='SHA256'>e77a6861a7f6fc25753bc9d7ab49c26d2ddfc426f025b902acefc406ae3b3732</ScriptHash>" +
                                 "<ScriptParameters>" +
                                     "<ScriptParameter ParameterGroupGuid='' ParameterGroupName='PG_' ParameterName='kustoquery' ParameterDataType='System.String' ParameterVisibility='0' ParameterType='0' ParameterValue='E:RSgwKQ=='/>" +
                                     "<ScriptParameter ParameterGroupGuid='' ParameterGroupName='PG_' ParameterName='select' ParameterDataType='System.String' ParameterVisibility='0' ParameterType='0' ParameterValue='E:RGV2aWNlOkRldmljZSxMaW5lOk51bWJlcixDb250ZW50OlN0cmluZw=='/>" +
-                                    $"<ScriptParameter ParameterGroupGuid='' ParameterGroupName='PG_' ParameterName='wmiquery' GroupClass='' ParameterDataType='System.String' ParameterVisibility='0' ParameterType='0' ParameterValue='E:{base64}'/>" +
+                                    $"<ScriptParameter ParameterGroupGuid='' ParameterGroupName='PG_' ParameterName='wmiquery' GroupClass='' ParameterDataType='System.String' ParameterVisibility='0' ParameterType='0' ParameterValue='E:{queryBase64}'/>" +
                                 "</ScriptParameters>" +
-                                $"<ParameterGroupHash ParameterHashAlg='SHA256'>{ParametersHash}</ParameterGroupHash>" +
+                                $"<ParameterGroupHash ParameterHashAlg='SHA256'>{parametersHash}</ParameterGroupHash>" +
                             "</ScriptContent>";
 
-                string input2 = xml;
-                var plainTextBytes2 = Encoding.UTF8.GetBytes(input2);
-                string base642 = Convert.ToBase64String(plainTextBytes2);
+                byte[] contentPlainTextBytes = Encoding.UTF8.GetBytes(contentXml);
+                string contentBase64 = Convert.ToBase64String(contentPlainTextBytes);
 
                 // Set up the rest of the input parameters for the method call
                 ManagementBaseObject inParams = clientOperationClass.GetMethodParameters("InitiateClientOperationEx");
                 inParams["Type"] = (uint)145;
-                inParams["TargetCollectionID"] = CollectionName;
+                inParams["TargetCollectionID"] = collectionId;
                 uint.TryParse(deviceId, out uint devId);
                 inParams["TargetResourceIDs"] = new uint[] { devId };
                 inParams["RandomizationWindow"] = null;
-                inParams["Param"] = base642;
+                inParams["Param"] = contentBase64;
 
                 // Call the InitiateClientOperationEx method with the specified arguments
                 ManagementBaseObject outParams = clientOperationClass.InvokeMethod("InitiateClientOperationEx", inParams, null);
-                int returnValue = Convert.ToInt32(outParams.Properties["OperationID"].Value);
-                if (returnValue > 0)
+                int operationId = Convert.ToInt32(outParams.Properties["OperationID"].Value);
+                if (operationId > 0)
                 {
-                    Console.WriteLine("[+] Fallback Method call succeeded");
-                    return returnValue;
+                    Console.WriteLine("[+] Fallback method call succeeded");
                 }
                 else
                 {
-                    Console.WriteLine("[!] Method call failed with error code {0}.", returnValue);
-                    return 0;
+                    Console.WriteLine("[!] Method call failed with error code {0}.", operationId);
                 }
+                return operationId;
             }
-            catch (ManagementException e)
+            catch (ManagementException ex)
             {
-                Console.WriteLine("[!] An error occurred while attempting to call the SMS Provider: " + e.Message);
+                Console.WriteLine("[!] An error occurred while attempting to call the SMS Provider: " + ex.Message);
                 return 0;
             }
         }
 
-        public static ManagementScope NewWmiConnection(string server, string wmiNamespace = null)
+        public static ManagementScope NewWmiConnection(string server, string wmiNamespace)
         {
-            string path = "";
             ConnectionOptions connection = new ConnectionOptions();
-            // local connection
-            if (server == "127.0.0.1")
-            {
-                if (string.IsNullOrEmpty(wmiNamespace))
-                {
-                    wmiNamespace = "root\\CCM";
-                }
-                path = $"\\\\{server}\\{wmiNamespace}";
-            }
-
             ManagementScope wmiConnection = null;
+
             try
             {
-                if (!string.IsNullOrEmpty(path))
+                if (!string.IsNullOrEmpty(wmiNamespace))
                 {
-                    wmiConnection = new ManagementScope(path, connection);
+                    wmiConnection = new ManagementScope(wmiNamespace, connection);
                     Console.WriteLine($"[+] Connecting to {wmiConnection.Path}");
                     wmiConnection.Connect();
                 }
@@ -189,14 +177,7 @@ namespace Sharphound
             }
             catch (ManagementException ex)
             {
-                Console.WriteLine($"[!] Could not connect to {path}: " + ex.Message);
-                if (path == "\\\\127.0.0.1\\root\\CCM" && ex.Message == "Invalid namespace ")
-                {
-                    Console.WriteLine(
-                        "[!] The SCCM client may not be installed on this machine\n" +
-                        "[!] Try specifying an SMS Provider and site code"
-                        );
-                }
+                Console.WriteLine($"[!] Could not connect to {wmiNamespace}: " + ex.Message);
             }
             catch (Exception ex)
             {
@@ -205,7 +186,7 @@ namespace Sharphound
             return wmiConnection;
         }
 
-        public static int GetOperationIdForQuery(string smsProvider, string sitecode, string collectionId, string fetchResultsFile)
+        public static int GetOperationIdForQuery(string smsProvider, string siteCode, string collectionId, string fetchResultsFile)
         {
             int operationId = 0;
 
@@ -269,11 +250,11 @@ namespace Sharphound
                         case HttpStatusCode.BadRequest:
                             //Handle 400 Error and fall back to SMS Provider method call to insure query is valid
                             query = !string.IsNullOrEmpty(query) ? query.Replace(@"\", @"\\") : null;
-                            Console.WriteLine("[!] Received a 400 ('Bad request') response from the API. Falling back to SMS Provider method ");
-                            var SMS_OperationId = InitiateClientOperationExMethodCall(query, smsProvider, collectionId, fetchResultsFile);
-                            if (SMS_OperationId != 0)
+                            Console.WriteLine("[!] Received a 400 ('Bad request') response from the API. Falling back to SMS Provider WMI method ");
+                            operationId = InitiateClientOperationExMethodCall(query, smsProvider, collectionId, fetchResultsFile, siteCode);
+                            if (operationId != 0)
                             {
-                                return SMS_OperationId;
+                                return operationId;
                             }
                             Console.WriteLine($"[!] The AdminService call failed due to an invalid query: {query}");
                             break;
@@ -299,7 +280,7 @@ namespace Sharphound
                     // Handle DNS resolution failure error
                     Console.WriteLine($"[!] The SMS Provider name could not be resolved: {smsProvider}");
                 }
-                return 0;
+                return operationId;
             }
         }
 

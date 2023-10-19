@@ -33,12 +33,12 @@ namespace Sharphound
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            //Remove old headers that might come from somewhere else
+            // Remove old headers that might come from somewhere else
             request.Headers.Remove(AuthorizationHeader);
             request.Headers.Remove(DateHeader);
             request.Headers.Remove(SignatureHeader);
 
-            //First we sign our request
+            // First we sign our request
             var time = DateTime.Now.ToString("yyyy-MM-dd'T'HH:mm:sszzz");
             Console.WriteLine("Time: " + time);
             Console.WriteLine("Formatted: " + time.Substring(0, 13));
