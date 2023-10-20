@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.DirectoryServices.ActiveDirectory;
 using System.DirectoryServices.Protocols;
 using System.IO;
@@ -129,7 +130,7 @@ namespace Sharphound
                     
                     File.Delete(filename);
                 }
-                catch (Exception e)
+                catch (Exception)
                 {
                     context.Logger.LogCritical("unable to write to target directory");
                     context.Flags.IsFaulted = true;
@@ -491,7 +492,7 @@ namespace Sharphound
                     // SCCM collection
                     if (!string.IsNullOrEmpty(options.SccmServer) && !string.IsNullOrEmpty(options.SccmSiteCode) && !string.IsNullOrEmpty(options.SccmCollectionId))
                     {
-                        JToken cmPivotResponse = await Fetch.Collect(options.SccmServer, options.SccmSiteCode, options.SccmCollectionId, options.FetchResultsFile, options.FetchTimeout);
+                        JToken cmPivotResponse = await Fetch.QueryAdminService(options.SccmServer, options.SccmSiteCode, options.SccmCollectionId, options.FetchResultsFile, options.FetchTimeout);
                         if (cmPivotResponse != null)
                         {
                             await APIClient.SendItAsync(cmPivotResponse);

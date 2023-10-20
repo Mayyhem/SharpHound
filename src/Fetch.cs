@@ -87,16 +87,6 @@ namespace Sharphound
             return null;
         }
 
-        public static async Task<JToken> Collect(string smsProvider, string siteCode, string collectionId, string fetchResultsFile, int fetchTimeout = 0)
-        {
-            var cmPivotData = await QueryAdminService(smsProvider, siteCode, collectionId, fetchResultsFile, fetchTimeout);
-            if (cmPivotData != null)
-            {
-                Console.WriteLine("\r" + cmPivotData.ToString() + "\r");
-            }
-            return cmPivotData;
-        }
-
         public static int InitiateClientOperationExMethodCall(string query, string smsProvider, string collectionId, string deviceId, string siteCode)
         {
             try
