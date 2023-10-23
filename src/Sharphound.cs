@@ -499,9 +499,16 @@ namespace Sharphound
                         }
                         else
                         {
-                            logger.LogError($"The SMS Provider did not respond with FETCH data");
+                            logger.LogError($"The SMS Provider ({options.SccmServer}) did not respond with FETCH data");
                         }
-                    }             
+                    }
+                    else if (!string.IsNullOrEmpty(options.SccmServer) || !string.IsNullOrEmpty(options.SccmSiteCode) || !string.IsNullOrEmpty(options.SccmCollectionId))
+                    {
+                        if (string.IsNullOrEmpty(options.SccmServer)) Console.WriteLine("[!] SccmServer was not specified");
+                        if (string.IsNullOrEmpty(options.SccmSiteCode)) Console.WriteLine("[!] SccmSiteCode was not specified");
+                        if (string.IsNullOrEmpty(options.SccmCollectionId)) Console.WriteLine("[!] SccmCollectionId was not specified");
+                        Console.WriteLine("[!] Skipping SCCM collection");
+                    }
 
                     /*
                     // LDAP collection
