@@ -37,9 +37,6 @@ namespace Sharphound
         [Option(HelpText = "Path to file containing computer names to enumerate", Default = null)]
         public string ComputerFile { get; set; }
 
-        [Option(HelpText = "Path to files containing FETCH results", Default = "C:\\Windows\\CCM\\ScriptStore\\FetchResults.json")]
-        public string FetchResultsFile { get; set; }
-
         // Options that affect output of SharpHound
         [Option(HelpText = "Directory to output file too", Default = ".")]
         public string OutputDirectory { get; set; }
@@ -97,24 +94,12 @@ namespace Sharphound
         [Option(HelpText = "Disables Kerberos Signing/Sealing", Default = false)]
         public bool DisableSigning { get; set; }
 
-        [Option(HelpText = "Specify an SCCM (ConfigMgr) SMS Provider (typically the site server) for collection", Default = null)]
-        public string SccmServer { get; set; }
-
-        [Option(HelpText = "Specify an SCCM (ConfigMgr) site code for collection", Default = null)]
-        public string SccmSiteCode { get; set; }
-
-        [Option(HelpText = "Specify an SCCM (ConfigMgr) collection ID to retrieve FETCH results from", Default = null)]
-        public string SccmCollectionId { get; set; }
-
         //Options that affect how enumeration is performed
         [Option(HelpText = "Skip checking if 445 is open", Default = false)]
         public bool SkipPortCheck { get; set; }
         
         [Option(HelpText = "Timeout for port checks in milliseconds", Default = 500)]
         public int PortCheckTimeout { get; set; }
-
-        [Option(HelpText = "Timeout for SCCM to collect FETCH results in minutes", Default = 0)]
-        public int FetchTimeout { get; set; }
 
         [Option(HelpText = "Skip check for PwdLastSet when enumerating computers", Default = false)]
         public bool SkipPasswordCheck { get; set; }
@@ -143,6 +128,25 @@ namespace Sharphound
 
         [Option(HelpText = "Collect all LDAP properties from objects")]
         public bool CollectAllProperties { get; set; }
+
+        // FETCH Options
+        [Option(HelpText = "Number of days behind to collect FETCH results from a remote share", Default = 7)]
+        public int FetchLookbackDays { get; set; }
+
+        [Option(HelpText = "Path to files containing FETCH results", Default = "C:\\Windows\\CCM\\ScriptStore\\FetchResults.json")]
+        public string FetchResultsFile { get; set; }
+
+        [Option(HelpText = "Timeout for SCCM to collect FETCH results in minutes", Default = 0)]
+        public int FetchTimeout { get; set; }
+
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) SMS Provider (typically the site server) for collection", Default = null)]
+        public string SccmServer { get; set; }
+
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) site code for collection", Default = null)]
+        public string SccmSiteCode { get; set; }
+
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) collection ID to retrieve FETCH results from", Default = null)]
+        public string SccmCollectionId { get; set; }
 
         //Loop Options
         [Option('l', "Loop", HelpText = "Loop computer collection")]

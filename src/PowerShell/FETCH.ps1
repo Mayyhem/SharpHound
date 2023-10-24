@@ -43,7 +43,7 @@ param(
     [ValidateRange(1,365)]
     [int]$sessionLookbackDays = 7, 
 
-        # Validate that the output file path exists or is set to "stdout", path ignored if outputToShare provided
+    # Validate that the output file path exists or is set to "stdout", path ignored if outputToShare provided
     [ValidateScript({
         if ($_ -eq "stdout" -or ((Test-Path (Split-Path -Path $_)) -and $_ -match '\.json$')) {
             $true

@@ -273,7 +273,7 @@ namespace Sharphound
             return await signedIngestClient.StartJobAsync((int)nextJob["id"]);
         }
 
-        public static async Task SendItAsync(JToken BloodHoundData)
+        public static async Task SendItAsync(List<JObject> bloodHoundData)
         {
             // Get environment variables from %USERPROFILE%\.env
             LoadEnvVariablesFromFile();
@@ -311,41 +311,16 @@ namespace Sharphound
                 return;
             }
             JObject nextJob = jobs[0] as JObject;
-            response = await sharpHoundAPIClientSigned.StartJobAsync((int)nextJob["id"]);
+            await sharpHoundAPIClientSigned.StartJobAsync((int)nextJob["id"]);
 
             // Prepare data
-            JObject obj = BloodHoundData.ToObject<JObject>();
-
-            // Extract the "Content" property for each "Line"
-            var result = obj["value"]
-                .SelectMany(lineValue => lineValue["Result"])
-                .Select(lineResult => new
-                {
-                    Line = (string)lineResult["Line"],
-                    Content = (string)lineResult["Content"],
-                    Device = (string)lineResult["Device"]
-                })
-                .ToList();
-
-            // Add each device to the job
-            foreach (var lineData in result)
+            foreach (JObject hostBloodHoundData in bloodHoundData)
             {
-                // Parse the "Content" property value for each "Line" as a JObject
-                JObject parsedContent = JObject.Parse(lineData.Content);
-
-                // Update the "version" attribute in the "meta" object to 5
-                Console.WriteLine($"[*] Setting meta version");
-                if (parsedContent["meta"] is JObject metaObject)
-                {
-                    metaObject["version"] = 5;
-                }
-
                 // Send data to ingest
-                response = await sharpHoundAPIClientSigned.PostIngestAsync(Encoding.UTF8.GetBytes(parsedContent.ToString(Formatting.None)));
+                response = await sharpHoundAPIClientSigned.PostIngestAsync(Encoding.UTF8.GetBytes(hostBloodHoundData.ToString(Formatting.None)));
             }
-
             // Mark the job as done so the ingest API scoops it up
-            response = await sharpHoundAPIClientSigned.EndJobAsync();
+            await sharpHoundAPIClientSigned.EndJobAsync();
         }
     }
 

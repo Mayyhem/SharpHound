@@ -22,6 +22,7 @@ using System.DirectoryServices.Protocols;
 using System.IO;
 using System.Linq;
 using System.Security.Principal;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using CommandLine;
@@ -489,13 +490,35 @@ namespace Sharphound
                     //     cancellationTokenSource.Cancel();
                     // };
 
-                    // SCCM collection
-                    if (!string.IsNullOrEmpty(options.SccmServer) && !string.IsNullOrEmpty(options.SccmSiteCode) && !string.IsNullOrEmpty(options.SccmCollectionId))
+                    // SMB share collection
+                    string uncPattern = @"^\\\\[\w\d.-]+\\[\w\d.-]+(\\)?";
+                    if (!string.IsNullOrEmpty(options.FetchResultsFile))
                     {
-                        JToken cmPivotResponse = await Fetch.QueryAdminService(options.SccmServer, options.SccmSiteCode, options.SccmCollectionId, options.FetchResultsFile, options.FetchTimeout);
+                        // Use this collection method automatically if --fetchresultsfile is a UNC path
+                        if (Regex.IsMatch(options.FetchResultsFile, uncPattern))
+                        {
+                            List<JObject> fetchResults = await Fetch.GetFetchResultsFromShare(options.FetchResultsFile, options.FetchLookbackDays);
+
+                            if (fetchResults != null)
+                            {
+                                await APIClient.SendItAsync(fetchResults);
+                            }
+                            else
+                            {
+                                logger.LogError($"The remote share ({options.FetchResultsFile}) did not respond with FETCH data");
+                            }
+                        }
+                    }
+
+                    // SCCM collection
+                    else if (!string.IsNullOrEmpty(options.SccmServer) && !string.IsNullOrEmpty(options.SccmSiteCode) && !string.IsNullOrEmpty(options.SccmCollectionId))
+                    {
+                        JObject cmPivotResponse = await Fetch.QuerySccmAdminService(options.SccmServer, options.SccmSiteCode, options.SccmCollectionId, options.FetchResultsFile, options.FetchTimeout);
+                        List<JObject> cmPivotResults = Fetch.PrepareCMPivotQueryResults(cmPivotResponse);
+
                         if (cmPivotResponse != null)
                         {
-                            await APIClient.SendItAsync(cmPivotResponse);
+                            await APIClient.SendItAsync(cmPivotResults);
                         }
                         else
                         {

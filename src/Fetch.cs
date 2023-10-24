@@ -1,6 +1,9 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using SharpHoundRPC;
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Management;
@@ -17,9 +20,9 @@ namespace Sharphound
 {
     public class Fetch
     {
-        public static async Task<JToken> QueryAdminService(string smsProvider, string siteCode, string collectionId, string fetchResultsFile, int fetchTimeout)
+        public static async Task<JObject> QuerySccmAdminService(string smsProvider, string siteCode, string collectionId, string fetchResultsFile, int fetchTimeout)
         {
-            int operationId = GetOperationIdForQuery(smsProvider, siteCode, collectionId, fetchResultsFile);
+            int operationId = GetSccmOperationIdForQuery(smsProvider, siteCode, collectionId, fetchResultsFile);
 
             if (operationId != 0)
             {
@@ -55,7 +58,7 @@ namespace Sharphound
                         attemptCounter++;
                         Console.WriteLine("[+] Trying again in 10 seconds");
                     }
-                    else 
+                    else
                     {
                         Console.WriteLine("[+] Successfully retrieved CMPivot results from AdminService");
                         break;
@@ -67,7 +70,7 @@ namespace Sharphound
                     // Deserialize the received JSON
                     var responseBody = await response.Content.ReadAsStringAsync();
                     var jsonBody = responseBody.Replace("\\r\\n\\r\\n", Environment.NewLine);
-                    var jsonObject = JsonConvert.DeserializeObject<JToken>(jsonBody);
+                    var jsonObject = JsonConvert.DeserializeObject<JObject>(jsonBody);
 
                     // Here we display the output as JSON after the user supplies the required flag
                     Console.WriteLine(jsonObject.ToString());
@@ -78,8 +81,8 @@ namespace Sharphound
                     Console.WriteLine("[!] Could not collect FETCH results before FetchTimeout was reached");
                     Console.WriteLine("[+] This could mean that the device is not online or the timeout value is too short");
                     Console.WriteLine($"[+] When they are ready, the results can be retrieved manually from {url}");
-                } 
-            } 
+                }
+            }
             else
             {
                 Console.WriteLine("[!] Could not successfully create an operation via the AdminService API");
@@ -87,7 +90,7 @@ namespace Sharphound
             return null;
         }
 
-        public static int InitiateClientOperationExMethodCall(string query, string smsProvider, string collectionId, string deviceId, string siteCode)
+        public static int InitiateSccmClientOperationExMethodCall(string query, string smsProvider, string collectionId, string deviceId, string siteCode)
         {
             try
             {
@@ -176,7 +179,7 @@ namespace Sharphound
             return wmiConnection;
         }
 
-        public static int GetOperationIdForQuery(string smsProvider, string siteCode, string collectionId, string fetchResultsFile)
+        public static int GetSccmOperationIdForQuery(string smsProvider, string siteCode, string collectionId, string fetchResultsFile)
         {
             int operationId = 0;
 
@@ -241,7 +244,7 @@ namespace Sharphound
                             //Handle 400 Error and fall back to SMS Provider method call to insure query is valid
                             query = !string.IsNullOrEmpty(query) ? query.Replace(@"\", @"\\") : null;
                             Console.WriteLine("[!] Received a 400 ('Bad request') response from the API. Falling back to SMS Provider WMI method ");
-                            operationId = InitiateClientOperationExMethodCall(query, smsProvider, collectionId, fetchResultsFile, siteCode);
+                            operationId = InitiateSccmClientOperationExMethodCall(query, smsProvider, collectionId, fetchResultsFile, siteCode);
                             if (operationId != 0)
                             {
                                 return operationId;
@@ -272,6 +275,81 @@ namespace Sharphound
                 }
                 return operationId;
             }
+        }
+
+        public static List<JObject> PrepareCMPivotQueryResults(JObject cmPivotResponse)
+        {
+            List<JObject> cmPivotResults = new List<JObject>();
+
+            // Extract the "Content" property for each "Line"
+            var queryResults = cmPivotResponse["value"]
+                .SelectMany(lineValue => lineValue["Result"])
+                .Select(lineResult => new
+                {
+                    Line = (string)lineResult["Line"],
+                    Content = (string)lineResult["Content"],
+                    Device = (string)lineResult["Device"]
+                })
+                .ToList();
+
+            foreach (var lineData in queryResults)
+            {
+                // Parse the "Content" property value for each "Line" as a JObject
+                JObject hostContent = JObject.Parse(lineData.Content);
+
+                // Update the "version" attribute in the "meta" object to 5
+                Console.WriteLine($"[*] Setting meta version");
+                if (hostContent["meta"] is JObject metaObject)
+                {
+                    metaObject["version"] = 5;
+                }
+                cmPivotResults.Add(hostContent);
+            }
+            return cmPivotResults;
+        }
+
+        public static async Task<List<JObject>> GetFetchResultsFromShare(string remoteDirectory, int lookbackDays)
+        {
+            List<JObject> fetchResults = new List<JObject>();
+            try
+            {
+                if (Directory.Exists(remoteDirectory))
+                {
+                    foreach (string dir in Directory.EnumerateDirectories(remoteDirectory))
+                    {
+                        string dirName = new DirectoryInfo(dir).Name;
+
+                        // Parse directory name into date
+                        if (DateTime.TryParseExact(dirName, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime dirDate))
+                        {
+                            // Check if this date is within the lookback period
+                            if (dirDate >= DateTime.Today.AddDays(-lookbackDays))
+                            {
+                                // Enumerate JSON files in this directory
+                                foreach (string filePath in Directory.EnumerateFiles(dir, "*.json"))
+                                {
+                                    // Read and deserialize JSON file
+                                    using (StreamReader sr = new StreamReader(filePath))
+                                    {
+                                        string jsonText = await sr.ReadToEndAsync();
+                                        JObject jsonObj = JObject.Parse(jsonText);
+                                        fetchResults.Add(jsonObj);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("[!] Directory does not exist.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[!] An error occurred: {ex.Message}");
+            }
+            return fetchResults;
         }
 
         public class TrustAllCertsPolicy
