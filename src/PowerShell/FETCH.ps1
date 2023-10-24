@@ -10,20 +10,40 @@ Purpose:
 -------------------------------------------
 #>
 
+[CmdletBinding()]
 param(
-    # Validate that the log file path exists or is set to "none" (default: "C:\Windows\CCM\ScriptStore\FetchExecution.log")
+    # Validate that the log file path exists or is set to "none"
     [ValidateScript({
-        if ($_ -eq "none" -or (Test-Path (Split-Path -Path $_))) {
+        if ([string]::IsNullOrEmpty($_) -or $_ -eq "none" -or (Test-Path (Split-Path -Path $_))) {
             $true
-        } elseif (-not (Test-Path (Split-Path -Path $_))) {
-            throw "The specified directory does not exist: $(Split-Path -Path $_)"
         } else {
-            throw "Output must be 'none' or a valid local/remote file path"
+            throw "The specified directory does not exist: $(Split-Path -Path $_)"
         }
     })]
-    [string]$logParam = "C:\Windows\CCM\ScriptStore\FetchExecution.log",
+    [string]$logFilePath = "C:\Windows\CCM\ScriptStore\FetchExecution.log",
 
-    # Validate that the output file path exists or is set to "stdout" (default: "C:\Windows\CCM\ScriptStore\FetchResults.json")
+    # Validate that the output directory path is a UNC path if used, ignored if writeTo is stdout
+    [ValidateScript({
+        if ([string]::IsNullOrEmpty($_)) {
+            $true
+        }
+        elseif ($_ -match '^\\\\[^\\]+\\[^\\]+\\?$') {
+            if (Test-Path $_) {
+                $true
+            } else {
+                throw "The specified UNC path does not exist: $_"
+            }
+        } else {
+            throw "The output directory path must be a UNC path (e.g., '\\server\share' or '\\server\share\')"
+        }
+    })]
+    [string]$outputToShare = $null,
+
+    # Number of days behind to fetch sessions
+    [ValidateRange(1,365)]
+    [int]$sessionLookbackDays = 7, 
+
+        # Validate that the output file path exists or is set to "stdout", path ignored if outputToShare provided
     [ValidateScript({
         if ($_ -eq "stdout" -or ((Test-Path (Split-Path -Path $_)) -and $_ -match '\.json$')) {
             $true
@@ -33,17 +53,21 @@ param(
             throw "Output must be 'stdout' or a local/remote file path ending in '.json'"
         }
     })]
-    [string]$outputParam = "C:\Windows\CCM\ScriptStore\FetchResults.json",
-
-    # Number of days behind to fetch sessions (default: 7)
-    [ValidateRange(1,365)]
-    [int]$sessionLookbackDays = 7
+    [string]$writeTo = "C:\Windows\CCM\ScriptStore\FetchResults.json"
 )
 
+# If there are undefined parameters, throw an error
+$definedParams = @("logFilePath", "outputToShare", "sessionLookbackDays", "writeTo")
+$undefinedParams = $PSBoundParameters.Keys | Where-Object { $_ -notin $definedParams }
+
+if ($undefinedParams -ne $null -and $undefinedParams.Count -gt 0) {
+    throw "Undefined parameters: $($undefinedParams -join ', ')"
+}
+
 # Initialize logging
-if ($logParam -ne "none") {
+if ($logFilePath -ne "none") {
     $nowTimeStamp = (Get-Date).ToUniversalTime()
-    "$nowTimeStamp UTC - FETCH execution started" | Out-File -FilePath $logParam -Append
+    "$nowTimeStamp UTC - FETCH execution started" | Out-File -FilePath $logFilePath -Append
     }
 
 # Catch and log execution error messages
@@ -180,13 +204,13 @@ try {
     #>
 
     # Export the security configuration to a file, discarding non-terminating errors to prevent stdout pollution
-    secedit /export /areas USER_RIGHTS /cfg "secedit.cfg" > $null 2>&1
+    secedit /export /areas USER_RIGHTS /cfg "C:\Windows\Temp\secedit.cfg" > $null 2>&1
 
     # Read the contents of the exported file
-    $seceditContents = Get-Content "secedit.cfg" -Raw
+    $seceditContents = Get-Content "C:\Windows\Temp\secedit.cfg" -Raw
 
     # Remove the exported file
-    Remove-Item "secedit.cfg"
+    Remove-Item "C:\Windows\Temp\secedit.cfg"
 
     # Extract and format user rights assignments from the secedit output
     # $userRightsLines = $seceditContents -split "`r`n" | Where-Object { $_ -like "Se*" }
@@ -234,12 +258,12 @@ try {
 
     foreach ($group in $(Get-LocalGroup)) {
         # Exclude domain groups on domain controllers
-        if ($group.PrincipalSource -eq "Local" -and $group.SID.Value -notcontains $ComputerDomainSID) {
+        if ($group.PrincipalSource -eq "Local" -and $group.SID.Value -notcontains $thisComputerDomainSID) {
             # Store attributes for each local group
             $currentGroup = @{
             # Replace built-in local group SIDs with domain computer SID
-            "ObjectIdentifier" = $($group.SID.Value.Replace("S-1-5-32", $ComputerDomainSID))
-            "Name" = $group.Name.ToUpper() + "@" + $ComputerFQDN
+            "ObjectIdentifier" = $($group.SID.Value.Replace("S-1-5-32", $thisComputerDomainSID))
+            "Name" = $group.Name.ToUpper() + "@" + $thisComputerFQDN
             "Results" = @()
             "LocalNames" = @()
             "Collected" = $true
@@ -261,8 +285,8 @@ try {
     }
 
 } catch {
-    if ($logParam -ne "none") {
-        "$((Get-Date).ToUniversalTime()) UTC - FETCH encountered an error at line $_.InvocationInfo.ScriptLineNumber: $($_.Exception.Message)" | Out-File -FilePath $logParam -Append
+    if ($logFilePath -ne "none") {
+        "$((Get-Date).ToUniversalTime()) UTC - FETCH encountered an error at line $_.InvocationInfo.ScriptLineNumber: $($_.Exception.Message)" | Out-File -FilePath $logFilePath -Append
     }
 }
 
@@ -293,11 +317,22 @@ $output = @{
     }
 }
 
-if ($outputParam -eq "stdout") {
+# Use stdout if specified
+if ($writeTo -eq "stdout") {
     $output | ConvertTo-Json -Depth 6 -Compress
 } else {
-    $output | ConvertTo-Json -Depth 6 -Compress | Out-File $outputParam
+# Use output directory for SMB collection if specified
+    if ($outputToShare) {
+        $todaysDirectory = Join-Path -Path $outputToShare -ChildPath (Get-Date -Format "yyyyMMdd")
+        # Create a directory for today if it does not already exist
+        if (-not (Test-Path $todaysDirectory)) {
+            New-Item -Path $todaysDirectory -ItemType Directory
+        }
+        # Use the computer's domain SID in output files written to network shares
+        $writeTo = Join-Path -Path $todaysDirectory -ChildPath "$($thisComputerDomainSID)_$((Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')).json"        
+    }
+    $output | ConvertTo-Json -Depth 6 -Compress | Out-File $writeTo
 }
 
 # End logging
-if ($logParam -ne "none") {$ts = (Get-Date).ToUniversalTime(); "$ts UTC - FETCH execution completed" | Out-File -FilePath $logParam -Append}
+if ($logFilePath -ne "none") {$ts = (Get-Date).ToUniversalTime(); "$ts UTC - FETCH execution completed" | Out-File -FilePath $logFilePath -Append}
