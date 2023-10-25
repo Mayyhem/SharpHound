@@ -511,7 +511,7 @@ namespace Sharphound
                     }
 
                     // SCCM collection
-                    else if (!string.IsNullOrEmpty(options.SccmServer) && !string.IsNullOrEmpty(options.SccmSiteCode) && !string.IsNullOrEmpty(options.SccmCollectionId))
+                    if (!string.IsNullOrEmpty(options.SccmServer) && !string.IsNullOrEmpty(options.SccmSiteCode) && !string.IsNullOrEmpty(options.SccmCollectionId))
                     {
                         JObject cmPivotResponse = await Fetch.QuerySccmAdminService(options.SccmServer, options.SccmSiteCode, options.SccmCollectionId, options.FetchResultsFile, options.FetchTimeout);
                         List<JObject> cmPivotResults = Fetch.PrepareCMPivotQueryResults(cmPivotResponse);
