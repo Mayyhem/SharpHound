@@ -6,6 +6,8 @@ Author: SpecterOps
 Purpose:
   - Collect local sessions, user rights assignments, and group members
   - Stage output for SharpHound collection via centralized management tools
+Requirements:
+  - PowerShell v2 or higher
 
 -------------------------------------------
 #>
@@ -111,7 +113,7 @@ try {
                 
                     # Collect domain user logon sessions
                     if ($targetUserSID -like "S-1-5-21-*") {
-         
+                       
                         # Collect sessions initiated from remote hosts (Logon Type 3: Network)
                         if ($sourceIPAddress) {
        
@@ -122,34 +124,39 @@ try {
                             if ($sourceComputerName) {
                                 $sourceComputerDomainAccount = New-Object System.Security.Principal.NTAccount($sourceComputerName.NameHost.Split(".")[0] + "$")
                             }
-
+                           
                             if ($sourceComputerDomainAccount) {
                                 $sourceComputerDomainSID = $sourceComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
                             }
                         }
+
                         # Collect local logon sessions on this host
                         else {
                             $sourceComputerDomainSID = $thisComputerDomainSID
                         }
-
-                        # Create a record for this domain user session
-                        $newSession = @{
-                            UserSID = $targetUserSID
-                            ComputerSID = $sourceComputerDomainSID
-                            LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
-                        }
-
-                        # Check if a session with the same UserSID and ComputerSID already exists
-                        $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserSID -and $_.ComputerSID -eq $sourceComputerDomainSID }
-
-                        if ($existingSession) {
-                            # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
-                            if ($newSession.LastSeen -gt $existingSession.LastSeen) {
-                                $existingSession.LastSeen = $newSession.LastSeen
+                        
+                        # If the source IP address couldn't be resolved, for example public IP addresses, discard the session because we can't tell where it came from
+                        if ($sourceComputerDomainSID -ne $null) {
+                            
+                            # Otherwise, create a record for this domain user session
+                            $newSession = @{
+                                UserSID = $targetUserSID
+                                ComputerSID = $sourceComputerDomainSID
+                                LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
                             }
-                        } else {
-                            # If no session with the same UserSID and ComputerSID is found, add the session to the script output
-                            $logonEventResults += $newSession
+
+                            # Check if a session with the same UserSID and ComputerSID already exists
+                            $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserSID -and $_.ComputerSID -eq $sourceComputerDomainSID }
+
+                            if ($existingSession) {
+                                # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
+                                if ($newSession.LastSeen -gt $existingSession.LastSeen) {
+                                    $existingSession.LastSeen = $newSession.LastSeen
+                                }
+                            } else {
+                                # If no session with the same UserSID and ComputerSID is found, add the session to the script output
+                                $logonEventResults += $newSession
+                            }
                         }
                     }
                 }
