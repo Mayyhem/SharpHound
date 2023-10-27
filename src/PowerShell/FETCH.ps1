@@ -8,6 +8,8 @@ Purpose:
   - Stage output for SharpHound collection via centralized management tools
 Requirements:
   - PowerShell v2 or higher
+  - Windows versions 10/2016 or higher
+  - .NET Framework
 
 -------------------------------------------
 #>
