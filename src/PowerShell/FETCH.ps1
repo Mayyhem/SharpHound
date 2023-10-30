@@ -85,6 +85,14 @@ try {
         } 
         exit
     }
+    # Confirm this is running in a high integrity context
+    if (-not (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 
+        Write-Host "[!] This script must be executed with administrator privileges. Exiting."
+        if ($logFilePath -ne "none") {
+            "$((Get-Date).ToUniversalTime()) UTC - Exiting because the script was not executed in a high integrity context" | Out-File -FilePath $logFilePath -Append
+        } 
+        exit
+    }
 
     <#
     -------------------------------------------
