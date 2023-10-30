@@ -7,8 +7,9 @@ Purpose:
   - Collect local sessions, user rights assignments, and group members
   - Stage output for SharpHound collection via centralized management tools
 Requirements:
+  - Run as SYSTEM
   - PowerShell v2 or higher
-  - Windows versions 10/2016 or higher
+  - Windows version 7/2008 or higher
   - .NET Framework
 
 -------------------------------------------
@@ -118,17 +119,32 @@ try {
                        
                         # Collect sessions initiated from remote hosts (Logon Type 3: Network)
                         if ($sourceIPAddress) {
-       
                             # Resolve the source IP address to a hostname, discarding non-terminating errors (failed resolution)
-                            $sourceComputerName = Resolve-DnsName -Name $sourceIPAddress -Type PTR 2>$null
+                            #$sourceComputerName = Resolve-DnsName -Name $sourceIPAddress -Type PTR 2>$null
+                            $sourceComputerName = $null
+                            try {
+                                $sourceComputerName = ((nslookup $sourceIPAddress 2>$null | Where-Object { $_ -match '^Name' }) -split ':')[1].Trim()
+                            } catch {
+                                # Ignore failed DNS lookups
+                                if ($logFilePath -ne "none") {
+                                    "$((Get-Date).ToUniversalTime()) UTC - Could not resolve IP to hostname: $sourceIPAddress" | Out-File -FilePath $logFilePath -Append
+                                }
+                            }
 
                             # Translate the hostname to a domain SID
                             if ($sourceComputerName) {
-                                $sourceComputerDomainAccount = New-Object System.Security.Principal.NTAccount($sourceComputerName.NameHost.Split(".")[0] + "$")
+                                $sourceComputerDomainAccount = New-Object System.Security.Principal.NTAccount($sourceComputerName.Split(".")[0] + "$")
                             }
-                           
-                            if ($sourceComputerDomainAccount) {
-                                $sourceComputerDomainSID = $sourceComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+
+                            try {
+                                if ($sourceComputerDomainAccount) {
+                                    $sourceComputerDomainSID = $sourceComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+                                }
+                            } catch {
+                                if ($logFilePath -ne "none") {
+                                    "$((Get-Date).ToUniversalTime()) UTC - Could not translate the domain account to a SID: $sourceComputerDomainAccount" | Out-File -FilePath $logFilePath -Append
+                                }
+                                Write-Host ""
                             }
                         }
 
@@ -265,29 +281,61 @@ try {
     $groups = @()
     $currentGroup = $null
 
-    foreach ($group in $(Get-LocalGroup)) {
-        # Exclude domain groups on domain controllers
-        if ($group.PrincipalSource -eq "Local" -and $group.SID.Value -notcontains $thisComputerDomainSID) {
-            # Store attributes for each local group
+    # Get the local machine SID prefixed to local accounts
+    $thisComputerMachineSID = ((Get-WmiObject -Class Win32_UserAccount -Filter "LocalAccount='True'" | Select-Object -First 1).SID -replace "-\d+$")
+
+    # Exclude domain controllers from local group collection
+    $isDC = (Get-WmiObject -Class Win32_ComputerSystem).DomainRole -ge 4
+
+    if (-not $isDC) {
+        # Create an ADSI object for the local computer
+        $computer = [ADSI]("WinNT://$env:COMPUTERNAME,computer")
+
+        # Iterate through each child object under the computer (these are local groups and users)
+        $groupsObject = $computer.psbase.children | Where-Object { $_.SchemaClassName -eq 'group' }
+        foreach ($group in $groupsObject) {
+            # Retrieve the name of the group
+            $groupName = $group.GetType().InvokeMember("Name", 'GetProperty', $null, $group, $null)
+
+            # Use WMI to fetch group SID
+            $groupSID = (Get-WmiObject Win32_Group -Filter "Name='$groupName'").SID
+
+            # Output the group name and member SID
             $currentGroup = @{
-            # Replace built-in local group SIDs with domain computer SID
-            "ObjectIdentifier" = $($group.SID.Value.Replace("S-1-5-32", $thisComputerDomainSID))
-            "Name" = $group.Name.ToUpper() + "@" + $thisComputerFQDN
-            "Results" = @()
-            "LocalNames" = @()
-            "Collected" = $true
-            "FailureReason" = $null
+                # Replace built-in local group SIDs with domain computer SID
+                "ObjectIdentifier" = $($groupSID.Replace("S-1-5-32", $thisComputerDomainSID))
+                "Name" = $groupName.ToUpper() + "@" + $thisComputerFQDN
+                "Results" = @()
+                "LocalNames" = @()
+                "Collected" = $true
+                "FailureReason" = $null
             }
+            # Iterate through each member of the current group
+            $members = $group.psbase.Invoke("Members")
 
-            # Add local group members that are AD principals to output for the current local group
-            $members = Get-LocalGroupMember -Group $group.Name
-            foreach ($member in $($members | Where-Object { $_.PrincipalSource -eq "ActiveDirectory" })) {
-                $memberId = @{
-                    "ObjectIdentifier" = $member.SID.Value
+            foreach ($member in $members) {
+                # Retrieve the class of the member to ensure it's a User
+                $memberClass = $member.GetType().InvokeMember("Class", 'GetProperty', $null, $member, $null)
+
+                # Only consider objects of class 'User'
+                if ($memberClass -eq "User") {
+
+                    # Retrieve the objectSid property of the member
+                    $MemberSIDBytes = $member.GetType().InvokeMember("objectSid", 'GetProperty', $null, $member, $null)
+
+                    # Convert the SID bytes to human-readable format
+                    $memberSID = New-Object System.Security.Principal.SecurityIdentifier $MemberSIDBytes, 0
+
+                    # Skip local accounts
+                    if ($memberSID -notlike "$thisComputerMachineSID*") {
+                        $memberId = @{
+                            "ObjectIdentifier" = $memberSID.Value
+                        }
+                        $currentGroup["Results"] += $memberId
+                        $memberName = $member.GetType().InvokeMember("Name", 'GetProperty', $null, $member, $null)                    
+                    }
                 }
-                $currentGroup["Results"] += $memberId   
             }
-
             # Add each local group to script output
             $groups += $currentGroup
         }
@@ -295,7 +343,7 @@ try {
 
 } catch {
     if ($logFilePath -ne "none") {
-        "$((Get-Date).ToUniversalTime()) UTC - FETCH encountered an error at line $_.InvocationInfo.ScriptLineNumber: $($_.Exception.Message)" | Out-File -FilePath $logFilePath -Append
+        "$((Get-Date).ToUniversalTime()) UTC - FETCH encountered an error at line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)" | Out-File -FilePath $logFilePath -Append
     }
 }
 
