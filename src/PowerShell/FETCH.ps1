@@ -381,23 +381,24 @@ try {
 Format output and stage for SharpHound collection
 -------------------------------------------
 #>
+$data = @(
+    @{
+        ObjectIdentifier = $thisComputerDomainSID
+        Properties = @{
+            name = $thisComputerFQDN
+        }
+        Sessions = $sessions | Sort-Object -Unique
+        UserRights = $userRights
+        LocalGroups = $groups
+    }
+)
 
 $output = @{
-    data = @(
-        @{
-            ObjectIdentifier = $thisComputerDomainSID
-            Properties = @{
-                name = $thisComputerFQDN
-            }
-            Sessions = $sessions | Sort-Object -Unique
-            UserRights = $userRights
-            LocalGroups = $groups
-        }
-    )
+    data = $data
     meta = @{
         methods = 107028
         type = "computers"
-        count = ($output.data).Count
+        count = $data.Count
         # Version is also replaced by SharpHound before upload to ingest API
         version = 5
     }
