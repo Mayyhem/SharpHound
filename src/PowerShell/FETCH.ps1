@@ -7,10 +7,10 @@ Purpose:
   - Collect local sessions, user rights assignments, and group members
   - Stage output for SharpHound collection via centralized management tools
 Requirements:
-  - Run as SYSTEM
+  - Local Administrators group privileges
+  - Domain-joined machine with line of sight to domain controller
   - PowerShell v2 or higher
-  - Windows version 7/2008 or higher
-  - .NET Framework
+  - .NET Framework 3.5 or higher
 
 -------------------------------------------
 #>
@@ -63,7 +63,7 @@ param(
 
 # If there are undefined parameters, throw an error
 $definedParams = @("logFilePath", "outputToShare", "sessionLookbackDays", "writeTo")
-$undefinedParams = $PSBoundParameters.Keys | Where-Object { $_ -notin $definedParams }
+$undefinedParams = $PSBoundParameters.Keys | Where-Object { -not ($definedParams -contains $_) }
 
 if ($undefinedParams -ne $null -and $undefinedParams.Count -gt 0) {
     throw "Undefined parameters: $($undefinedParams -join ', ')"
@@ -77,6 +77,15 @@ if ($logFilePath -ne "none") {
 
 # Catch and log execution error messages
 try {
+    # Confirm this is running on a domain-joined machine
+    if (-not (Get-WmiObject Win32_ComputerSystem).PartOfDomain) {
+        Write-Host "[!] This system is not joined to Active Directory. Exiting."
+        if ($logFilePath -ne "none") {
+            "$((Get-Date).ToUniversalTime()) UTC - Exiting because this system is not AD-joined" | Out-File -FilePath $logFilePath -Append
+        } 
+        exit
+    }
+
     <#
     -------------------------------------------
     Collect sessions
@@ -86,7 +95,13 @@ try {
     # Collect local system domain computer account SID via LDAP
     $thisComputerName = $env:COMPUTERNAME
     $thisComputerDomainAccount = New-Object System.Security.Principal.NTAccount("${thisComputerName}$")
-    $thisComputerDomainSID = $thisComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    try {
+        $thisComputerDomainSID = $thisComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value   
+    } catch {
+        if ($logFilePath -ne "none") {
+            "$((Get-Date).ToUniversalTime()) UTC - Could not translate the domain account to a SID: $sourceComputerDomainAccount" | Out-File -FilePath $logFilePath -Append
+        } 
+    }
 
     # Collect local system FQDN
     $thisComputerFQDN = [System.Net.Dns]::GetHostEntry([string]"localhost").HostName
@@ -113,7 +128,7 @@ try {
                     $logonType = $eventData | Where-Object { $_.Name -eq 'LogonType' } | Select-Object -ExpandProperty '#text'
                     $sourceIPAddress = $eventData | Where-Object { $_.Name -eq 'IpAddress' } | Select-Object -ExpandProperty '#text'
                     $targetUserSID = $eventData | Where-Object { $_.Name -eq 'TargetUserSid' } | Select-Object -ExpandProperty '#text'
-                
+                    
                     # Collect domain user logon sessions
                     if ($targetUserSID -like "S-1-5-21-*") {
                        
@@ -144,7 +159,6 @@ try {
                                 if ($logFilePath -ne "none") {
                                     "$((Get-Date).ToUniversalTime()) UTC - Could not translate the domain account to a SID: $sourceComputerDomainAccount" | Out-File -FilePath $logFilePath -Append
                                 }
-                                Write-Host ""
                             }
                         }
 
@@ -162,7 +176,7 @@ try {
                                 ComputerSID = $sourceComputerDomainSID
                                 LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
                             }
-
+                            
                             # Check if a session with the same UserSID and ComputerSID already exists
                             $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserSID -and $_.ComputerSID -eq $sourceComputerDomainSID }
 
@@ -186,7 +200,14 @@ try {
 
                     # Convert TargetUserName and TargetDomainName to domain SID
                     $targetUserDomainAccount = New-Object System.Security.Principal.NTAccount("$targetDomainName\$targetUserName")
-                    $targetUserDomainSID = $targetUserDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+                    
+                    try {
+                        $targetUserDomainSID = $targetUserDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+                    } catch {
+                        if ($logFilePath -ne "none") {
+                            "$((Get-Date).ToUniversalTime()) UTC - Could not translate the domain account to a SID: $targetUserDomainAccount" | Out-File -FilePath $logFilePath -Append
+                        } 
+                    }
 
                     # Collect domain user logon sessions on this host that did not originate from SYSTEM
                     if ($targetUserDomainSID -like "S-1-5-21-*" -and $targetUserDomainSID -ne $thisComputerDomainSID) {
@@ -196,7 +217,7 @@ try {
                             ComputerSID = $thisComputerDomainSID
                             LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
                         }
-
+ 
                         # Check if a session with the same UserSID and ComputerSID already exists
                         $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserDomainSID -and $_.ComputerSID -eq $thisComputerDomainSID }
 
@@ -232,7 +253,7 @@ try {
     secedit /export /areas USER_RIGHTS /cfg "C:\Windows\Temp\secedit.cfg" > $null 2>&1
 
     # Read the contents of the exported file
-    $seceditContents = Get-Content "C:\Windows\Temp\secedit.cfg" -Raw
+    $seceditContents = Get-Content "C:\Windows\Temp\secedit.cfg" | Out-String
 
     # Remove the exported file
     Remove-Item "C:\Windows\Temp\secedit.cfg"
@@ -372,11 +393,52 @@ $output = @{
         # Version is also replaced by SharpHound before upload to ingest API
         version = 5
     }
+} 
+
+# JSON converter for PowerShell 2.0 compatibility
+function ConvertTo-CustomJson {
+    param (
+        [hashtable] $hash
+    )
+    
+    $output = ""
+    
+    function Convert-Item ($item) {
+        if ($item -is [string]) {
+            return '"' + $item + '"'
+        } elseif ($item -is [int]) {
+            return $item
+        } elseif ($item -is [array]) {
+            $arr = @($item | ForEach-Object { Convert-Item $_ })
+            return '[' + ($arr -join ",") + ']'
+        } elseif ($item -is [hashtable]) {
+            $obj = @()
+            $item.Keys | ForEach-Object {
+                $key = $_
+                $value = $item[$key]
+                $obj += ('"' + $key + '":' + (Convert-Item $value))
+            }
+            return '{' + ($obj -join ",") + '}'
+        } else {
+            return 'null'
+        }
+    }
+    
+    $hash.Keys | ForEach-Object {
+        $key = $_
+        $value = $hash[$key]
+        $output += ('"' + $key + '":' + (Convert-Item $value) + ',')
+    }
+    
+    # Remove trailing comma and wrap with curly braces
+    return '{' + $output.TrimEnd(",") + '}'
 }
+$jsonOutput = ConvertTo-CustomJson $output
 
 # Use stdout if specified
 if ($writeTo -eq "stdout") {
-    $output | ConvertTo-Json -Depth 6 -Compress
+    #$output | ConvertTo-Json -Depth 6 -Compress
+    $jsonOutput
 } else {
 # Use output directory for SMB collection if specified
     if ($outputToShare) {
@@ -388,7 +450,8 @@ if ($writeTo -eq "stdout") {
         # Use the computer's domain SID in output files written to network shares
         $writeTo = Join-Path -Path $todaysDirectory -ChildPath "$($thisComputerDomainSID)_$((Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')).json"        
     }
-    $output | ConvertTo-Json -Depth 6 -Compress | Out-File $writeTo
+    #$output | ConvertTo-Json -Depth 6 -Compress | Out-File $writeTo
+    $jsonOutput | Out-File $writeTo
 }
 
 # End logging
