@@ -61,6 +61,9 @@ param(
     [string]$writeTo = "C:\Windows\CCM\ScriptStore\FetchResults.json"
 )
 
+# Enable/disable trace logging 
+#Set-PSDebug -Trace 1
+
 # If there are undefined parameters, throw an error
 $definedParams = @("logFilePath", "outputToShare", "sessionLookbackDays", "writeTo")
 $undefinedParams = $PSBoundParameters.Keys | Where-Object { -not ($definedParams -contains $_) }
@@ -141,7 +144,7 @@ try {
                     if ($targetUserSID -like "S-1-5-21-*") {
                        
                         # Collect sessions initiated from remote hosts (Logon Type 3: Network)
-                        if ($sourceIPAddress) {
+                        if ($sourceIPAddress -match "^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$") {
                             # Resolve the source IP address to a hostname, discarding non-terminating errors (failed resolution)
                             #$sourceComputerName = Resolve-DnsName -Name $sourceIPAddress -Type PTR 2>$null
                             $sourceComputerName = $null
@@ -165,8 +168,13 @@ try {
                                 }
                             } catch {
                                 if ($logFilePath -ne "none") {
-                                    "$((Get-Date).ToUniversalTime()) UTC - Could not translate the domain account to a SID: $sourceComputerDomainAccount" | Out-File -FilePath $logFilePath -Append
+                                    "$((Get-Date).ToUniversalTime()) UTC - Could not translate the account to a SID: $sourceComputerDomainAccount" | Out-File -FilePath $logFilePath -Append
                                 }
+                            }
+                        }
+                        elseif ($sourceIPAddress) {
+                            if ($logFilePath -ne "none") {
+                                "$((Get-Date).ToUniversalTime()) UTC - Encountered an event with invalid IpAddress: $sourceIPAddress" | Out-File -FilePath $logFilePath -Append
                             }
                         }
 
@@ -213,7 +221,7 @@ try {
                         $targetUserDomainSID = $targetUserDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
                     } catch {
                         if ($logFilePath -ne "none") {
-                            "$((Get-Date).ToUniversalTime()) UTC - Could not translate the domain account to a SID: $targetUserDomainAccount" | Out-File -FilePath $logFilePath -Append
+                            "$((Get-Date).ToUniversalTime()) UTC - Could not translate the account to a SID: $targetUserDomainAccount" | Out-File -FilePath $logFilePath -Append
                         } 
                     }
 
