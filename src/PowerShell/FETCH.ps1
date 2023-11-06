@@ -97,16 +97,11 @@ try {
         exit
     }
 
-    <#
-    -------------------------------------------
-    Collect sessions
-    -------------------------------------------
-    #>
-
     # Collect local system domain computer account SID via LDAP
     $thisComputerName = $env:COMPUTERNAME
     $thisComputerDomain = (Get-WmiObject Win32_ComputerSystem).Domain
     $thisComputerDomainAccount = New-Object System.Security.Principal.NTAccount("${thisComputerName}$")
+
     try {
         $thisComputerDomainSID = $thisComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value   
     } catch {
@@ -118,12 +113,65 @@ try {
     # Collect local system FQDN
     $thisComputerFQDN = [System.Net.Dns]::GetHostEntry([string]"localhost").HostName
 
+    # Get the local machine SID prefixed to local accounts
+    $thisComputerMachineSID = ((Get-WmiObject -Class Win32_UserAccount -Filter "LocalAccount='True'" | Select-Object -First 1).SID -replace "-\d+$")
+
+
+    <#
+    -------------------------------------------
+    Collect sessions
+    -------------------------------------------
+    #>
+
+    $collectedSessions = @()
+
+    # Function to add or update a session in $collectedSessions
+    function AddOrUpdateSessions($collectedSessions, $newSession) {
+        # Check if a session with the same UserSID and ComputerSID already exists
+        $existingSession = $collectedSessions | Where-Object { $_.UserSID -eq $newSession.UserSID -and $_.ComputerSID -eq $newSession.ComputerSID }
+
+        if ($existingSession) {
+            # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
+            if ($newSession.LastSeen -gt $existingSession.LastSeen) {
+                $existingSession.LastSeen = $newSession.LastSeen
+            }
+        } else {
+            # If no session with the same UserSID and ComputerSID is found, add the session to the script output
+            $collectedSessions += $newSession
+        }
+        return $collectedSessions
+    }
+
     # Define timespan for session collection
     $sessionLookbackStartDate = (Get-Date).AddDays(-$sessionLookbackDays)
 
+    # Get logged in accounts from HKEY_USERS hive
+    $registryKeys = Get-Item -Path "registry::HKEY_USERS\*"
+
+    # Filter keys to those associated with user accounts
+    $filteredKeys = $registryKeys | Where-Object {
+        $_.Name -match 'S-1-5-21-' -and -not $_.Name.EndsWith('_Classes')
+    }
+
+    foreach ($filteredKey in $filteredKeys) {
+
+        $hkuSID = ($filteredKey.Name -split "\\")[1]
+
+        # Discard local users
+        if ($hkuSID -notlike "$thisComputerMachineSID*") {
+            
+            # Create a record for each domain user session
+            $newSession = @{
+                UserSID = $hkuSID
+                ComputerSID = $thisComputerDomainSID
+                LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f (Get-Date).ToUniversalTime()
+            }
+            $collectedSessions = AddOrUpdateSessions $collectedSessions $newSession
+        }
+    }
+
     # Define Event IDs to collect
     $eventIDs = 4624, 4648
-    $logonEventResults = @()
 
     foreach ($eventID in $eventIDs) {
         # Enumerate logon events in the specified window
@@ -141,8 +189,8 @@ try {
                     $sourceIPAddress = $eventData | Where-Object { $_.Name -eq 'IpAddress' } | Select-Object -ExpandProperty '#text'
                     $targetUserSID = $eventData | Where-Object { $_.Name -eq 'TargetUserSid' } | Select-Object -ExpandProperty '#text'
                     
-                    # Collect domain user logon sessions
-                    if ($targetUserSID -like "S-1-5-21-*") {
+                    # Collect domain user logon sessions (discard local users)
+                    if ($targetUserSID -like "S-1-5-21-*" -and $targetUserSID -notlike "$thisComputerMachineSID*") {
                        
                         # Collect sessions initiated from remote hosts (Logon Type 3: Network)
                         if ($sourceIPAddress -match "^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$") {
@@ -193,19 +241,7 @@ try {
                                 ComputerSID = $sourceComputerDomainSID
                                 LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
                             }
-                            
-                            # Check if a session with the same UserSID and ComputerSID already exists
-                            $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserSID -and $_.ComputerSID -eq $sourceComputerDomainSID }
-
-                            if ($existingSession) {
-                                # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
-                                if ($newSession.LastSeen -gt $existingSession.LastSeen) {
-                                    $existingSession.LastSeen = $newSession.LastSeen
-                                }
-                            } else {
-                                # If no session with the same UserSID and ComputerSID is found, add the session to the script output
-                                $logonEventResults += $newSession
-                            }
+                            $collectedSessions = AddOrUpdateSessions $collectedSessions $newSession
                         }
                     }
                 }
@@ -226,27 +262,16 @@ try {
                         } 
                     }
 
-                    # Collect domain user logon sessions on this host that did not originate from SYSTEM
-                    if ($targetUserDomainSID -like "S-1-5-21-*" -and $targetUserDomainSID -ne $thisComputerDomainSID) {
+                    # Collect domain user logon sessions on this host that did not originate from SYSTEM, discarding local users
+                    if ($targetUserDomainSID -like "S-1-5-21-*" -and $targetUserDomainSID -notlike "$thisComputerMachineSID*" -and $targetUserDomainSID -ne $thisComputerDomainSID) {
+                        
                         # Create a record for this domain user session
                         $newSession = @{
                             UserSID = $targetUserDomainSID
                             ComputerSID = $thisComputerDomainSID
                             LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
                         }
- 
-                        # Check if a session with the same UserSID and ComputerSID already exists
-                        $existingSession = $logonEventResults | Where-Object { $_.UserSID -eq $targetUserDomainSID -and $_.ComputerSID -eq $thisComputerDomainSID }
-
-                        if ($existingSession) {
-                            # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
-                            if ($newSession.LastSeen -gt $existingSession.LastSeen) {
-                                $existingSession.LastSeen = $newSession.LastSeen
-                            }
-                        } else {
-                            # If no session with the same UserSID and ComputerSID is found, add the session to the script output
-                            $logonEventResults += $newSession
-                        }
+                        $collectedSessions = AddOrUpdateSessions $collectedSessions $newSession
                     }
                 }
             }
@@ -254,7 +279,7 @@ try {
     }
     
     $sessions = @{
-        "Results" = $logonEventResults 
+        "Results" = $collectedSessions
         "Collected" = $true
         "FailureReason" = $null
     }
@@ -276,8 +301,6 @@ try {
     Remove-Item "C:\Windows\Temp\secedit.cfg"
 
     # Extract and format user rights assignments from the secedit output
-    # $userRightsLines = $seceditContents -split "`r`n" | Where-Object { $_ -like "Se*" }
-    # Only collect for CanRDP edge pending BloodHound support for additional URAs
     $userRightsLines = $seceditContents -split "`r`n" | Where-Object { $_ -like "SeRemoteInteractiveLogonRight*" }
 
     # Initialize output variables
@@ -318,9 +341,6 @@ try {
  
     $groups = @()
     $currentGroup = $null
-
-    # Get the local machine SID prefixed to local accounts
-    $thisComputerMachineSID = ((Get-WmiObject -Class Win32_UserAccount -Filter "LocalAccount='True'" | Select-Object -First 1).SID -replace "-\d+$")
 
     # Exclude domain controllers from local group collection
     $isDC = (Get-WmiObject -Class Win32_ComputerSystem).DomainRole -ge 4
@@ -445,6 +465,7 @@ try {
 Format output and stage for SharpHound collection
 -------------------------------------------
 #>
+
 $data = @(
     @{
         ObjectIdentifier = $thisComputerDomainSID
@@ -481,6 +502,8 @@ function ConvertTo-CustomJson {
             return '"' + $item + '"'
         } elseif ($item -is [int]) {
             return $item
+        } elseif ($item -is [bool]) {
+            return $item.ToString().ToLower()
         } elseif ($item -is [array]) {
             $arr = @($item | ForEach-Object { Convert-Item $_ })
             return '[' + ($arr -join ",") + ']'
