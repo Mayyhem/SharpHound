@@ -105,6 +105,7 @@ try {
 
     # Collect local system domain computer account SID via LDAP
     $thisComputerName = $env:COMPUTERNAME
+    $thisComputerDomain = (Get-WmiObject Win32_ComputerSystem).Domain
     $thisComputerDomainAccount = New-Object System.Security.Principal.NTAccount("${thisComputerName}$")
     try {
         $thisComputerDomainSID = $thisComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value   
@@ -330,7 +331,9 @@ try {
 
         # Iterate through each child object under the computer (these are local groups and users)
         $groupsObject = $computer.psbase.children | Where-Object { $_.SchemaClassName -eq 'group' }
+
         foreach ($group in $groupsObject) {
+
             # Retrieve the name of the group
             $groupName = $group.GetType().InvokeMember("Name", 'GetProperty', $null, $group, $null)
 
@@ -341,37 +344,90 @@ try {
             $currentGroup = @{
                 # Replace built-in local group SIDs with domain computer SID
                 "ObjectIdentifier" = $($groupSID.Replace("S-1-5-32", $thisComputerDomainSID))
-                "Name" = $groupName.ToUpper() + "@" + $thisComputerFQDN
+                "Name" = $groupName.ToUpper() + "@" + $thisComputerFQDN.ToUpper()
                 "Results" = @()
                 "LocalNames" = @()
                 "Collected" = $true
                 "FailureReason" = $null
             }
+
             # Iterate through each member of the current group
             $members = $group.psbase.Invoke("Members")
 
             foreach ($member in $members) {
+
+                # Start with null output
+                $result = $null
+                
                 # Retrieve the class of the member to ensure it's a User
                 $memberClass = $member.GetType().InvokeMember("Class", 'GetProperty', $null, $member, $null)
 
-                # Only consider objects of class 'User'
-                if ($memberClass -eq "User") {
+                # Retrieve name and SID and convert the SID to human-readable format
+                $memberName = $member.GetType().InvokeMember("Name", 'GetProperty', $null, $member, $null) 
+                $memberSIDBytes = $member.GetType().InvokeMember("objectSid", 'GetProperty', $null, $member, $null)
+                $memberSID = (New-Object System.Security.Principal.SecurityIdentifier $memberSIDBytes, 0).Value
+               
+                switch ($memberClass) {
 
-                    # Retrieve the objectSid property of the member
-                    $MemberSIDBytes = $member.GetType().InvokeMember("objectSid", 'GetProperty', $null, $member, $null)
+                    "Group" {
 
-                    # Convert the SID bytes to human-readable format
-                    $memberSID = New-Object System.Security.Principal.SecurityIdentifier $MemberSIDBytes, 0
+                        # Default groups with well-known SIDs
+                        if ($memberSID.Length -lt 14) {
+                            
+                            # Replace built-in local group SIDs with domain computer SID
+                            if ($memberSID -like "S-1-5-32-*") {
+                                $memberType = "LocalGroup"
+                                $result = @{
+                                    "ObjectIdentifier" = $($memberSID.Replace("S-1-5-32", $thisComputerDomainSID))
+                                    "ObjectType" = $memberType
+                                }
 
-                    # Skip local accounts
-                    if ($memberSID -notlike "$thisComputerMachineSID*") {
-                        $memberId = @{
-                            "ObjectIdentifier" = $memberSID.Value
+                            # Everyone and Authenticated Users include domain users, so collect them
+                            } elseif ($memberSID -eq "S-1-1-0" -or $memberSID -eq "S-1-5-11") {
+                                $memberType = "Group"
+                                $result = @{
+                                    "ObjectIdentifier" = "$thisComputerDomain-$memberSID"
+                                    "ObjectType" = $memberType
+                                }
+                            } 
+                        } 
+
+                        # Non-default local groups
+                        elseif ($memberSID -like "$thisComputerMachineSID*") {
+                            $memberType = "LocalGroup"
+                            $localGroupID = ($memberSID -split "-")[-1]
+                            $result = @{
+                                "ObjectIdentifier" = ($thisComputerDomainSID -join $localGroupID)
+                                "ObjectType" = $memberType
+                            }
+
+                        # Domain groups
+                        } else {
+                            $memberType = "Group"
+                            $result = @{
+                                "ObjectIdentifier" = $memberSID
+                                "ObjectType" = $memberType
+                            }
                         }
-                        $currentGroup["Results"] += $memberId
-                        $memberName = $member.GetType().InvokeMember("Name", 'GetProperty', $null, $member, $null)                    
+                    }
+
+                    "User" {
+
+                        # Skip local users
+                        if ($memberSID -notlike "$thisComputerMachineSID*") {
+
+                            # Collect domain users and computers
+                            $memberType = "Base"
+                            $result = @{
+                                "ObjectIdentifier" = $memberSID
+                                "ObjectType" = $memberType
+                            }
+                        } 
                     }
                 }
+                if ($result) {
+                    $currentGroup["Results"] += $result
+                }                                   
             }
             # Add each local group to script output
             $groups += $currentGroup
