@@ -126,20 +126,22 @@ try {
     $collectedSessions = @()
 
     # Function to add or update a session in $collectedSessions
-    function AddOrUpdateSessions($collectedSessions, $newSession) {
+    function AddOrUpdateSessions([ref]$collectedSessions, $newSession) {
+
         # Check if a session with the same UserSID and ComputerSID already exists
-        $existingSession = $collectedSessions | Where-Object { $_.UserSID -eq $newSession.UserSID -and $_.ComputerSID -eq $newSession.ComputerSID }
+        $existingSession = $collectedSessions.Value | Where-Object { $_.UserSID -eq $newSession.UserSID -and $_.ComputerSID -eq $newSession.ComputerSID }
 
         if ($existingSession) {
+ 
             # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
             if ($newSession.LastSeen -gt $existingSession.LastSeen) {
                 $existingSession.LastSeen = $newSession.LastSeen
             }
         } else {
+            
             # If no session with the same UserSID and ComputerSID is found, add the session to the script output
-            $collectedSessions += $newSession
+            $collectedSessions.Value += $newSession
         }
-        return $collectedSessions
     }
 
     # Define timespan for session collection
@@ -166,7 +168,7 @@ try {
                 ComputerSID = $thisComputerDomainSID
                 LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f (Get-Date).ToUniversalTime()
             }
-            $collectedSessions = AddOrUpdateSessions $collectedSessions $newSession
+            AddOrUpdateSessions ([ref]$collectedSessions) $newSession | Out-Null
         }
     }
 
@@ -194,6 +196,7 @@ try {
                        
                         # Collect sessions initiated from remote hosts (Logon Type 3: Network)
                         if ($sourceIPAddress -match "^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$") {
+                            
                             # Resolve the source IP address to a hostname, discarding non-terminating errors (failed resolution)
                             #$sourceComputerName = Resolve-DnsName -Name $sourceIPAddress -Type PTR 2>$null
                             $sourceComputerName = $null
@@ -241,7 +244,7 @@ try {
                                 ComputerSID = $sourceComputerDomainSID
                                 LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
                             }
-                            $collectedSessions = AddOrUpdateSessions $collectedSessions $newSession
+                            AddOrUpdateSessions ([ref]$collectedSessions) $newSession | Out-Null
                         }
                     }
                 }
@@ -271,13 +274,13 @@ try {
                             ComputerSID = $thisComputerDomainSID
                             LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $event.TimeCreated.ToUniversalTime()
                         }
-                        $collectedSessions = AddOrUpdateSessions $collectedSessions $newSession
+                        AddOrUpdateSessions ([ref]$collectedSessions) $newSession | Out-Null
                     }
                 }
             }
         }
     }
-    
+
     $sessions = @{
         "Results" = $collectedSessions
         "Collected" = $true
