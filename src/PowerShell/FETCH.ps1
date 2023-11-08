@@ -519,7 +519,7 @@ try {
                             $memberType = "LocalGroup"
                             $localGroupID = ($memberSID -split "-")[-1]
                             $result = @{
-                                "ObjectIdentifier" = ($thisComputerDomainSID -join $localGroupID)
+                                "ObjectIdentifier" = ($thisComputerDomainSID.ToUpper() -join $localGroupID)
                                 "ObjectType" = $memberType
                             }
 
@@ -571,7 +571,7 @@ try {
         @{
             ObjectIdentifier = $thisComputerDomainSID
             Properties = @{
-                name = $thisComputerFQDN
+                name = $thisComputerFQDN.ToUpper()
             }
             Sessions = $sessions | Sort-Object -Unique
             UserRights = $userRights
