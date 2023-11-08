@@ -503,23 +503,33 @@ try {
                                 }
 
                             # Everyone and Authenticated Users include domain users, so collect them
-                            } elseif ($memberSID -eq "S-1-1-0" -or $memberSID -eq "S-1-5-11") {
+                            } 
+                            
+                            elseif ($memberSID -eq "S-1-1-0" -or $memberSID -eq "S-1-5-11") {
                                 $memberType = "Group"
                                 $result = @{
-                                    "ObjectIdentifier" = "$thisComputerDomain-$memberSID"
+                                    "ObjectIdentifier" = "$($thisComputerDomain.ToUpper())-$memberSID"
                                     "ObjectType" = $memberType
                                 }
+
                             } else {
                                 Write-DebugInfo "Not collecting members of $memberName ($memberSID)"
                             }
-                        }
+
+                        # This computer
+                        } elseif ($memberSID -eq "$thisComputerMachineSID") {
+                            $memberType = "Computer"
+                            $result = @{
+                                "ObjectIdentifier" = $thisComputerDomainSID
+                                "ObjectType" = $memberType
+                            }
 
                         # Non-default local groups
-                        elseif ($memberSID -like "$thisComputerMachineSID*") {
+                        } elseif ($memberSID -like "$thisComputerMachineSID*") {
                             $memberType = "LocalGroup"
                             $localGroupID = ($memberSID -split "-")[-1]
                             $result = @{
-                                "ObjectIdentifier" = ($thisComputerDomainSID.ToUpper() -join $localGroupID)
+                                "ObjectIdentifier" = ($thisComputerDomainSID -join $localGroupID)
                                 "ObjectType" = $memberType
                             }
 
