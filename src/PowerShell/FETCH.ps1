@@ -1,7 +1,8 @@
 ﻿<#
--------------------------------------------
-FETCH: Flexible Enumeration Tool for Centrally-managed Hosts
+.SYNOPSIS
+FETCH: Flexible Enumeration Tool for Centrally-managed Hosts.
 
+.DESCRIPTION
 Author: SpecterOps
 Purpose:
   - Collect local sessions, user rights assignments, and group members
@@ -12,14 +13,50 @@ Requirements:
   - PowerShell v2 or higher
   - .NET Framework 3.5 or higher
 
--------------------------------------------
+.PARAMETER DebugMode
+Use this switch to enable debug mode.
+
+.PARAMETER LogFilePath
+Specifies the path to the log file. Default is 'C:\Windows\CCM\ScriptStore\FetchExecution.log'.
+
+.PARAMETER OutputToShare
+Specifies a UNC path to output data. Leave empty to output to a local file or stdout.
+
+.PARAMETER SessionLookbackDays
+Number of days to look back for sessions. Default is 7.
+
+.PARAMETER Trace
+Enables trace logging for detailed debugging. This will significantly slow down execution.
+
+.PARAMETER Verbose
+Enable verbose logging of script execution events.
+
+.PARAMETER WriteTo
+Specifies the output file path for results or 'stdout' to write to the console.
+
+.EXAMPLE
+.\FETCH.ps1 -Help                    
+# Display help text
+
+.EXAMPLE
+.\FETCH.ps1 -SessionLookbackDays 10 -WriteTo C:\Windows\Temp\FetchResults.json
+# Collect sessions from the last 10 days of event logs, output to a local file
+
+.EXAMPLE
+.\FETCH.ps1 -WriteTo stdout
+# Output to stdout
+
+.LINK
+https://github.com/BloodHoundAD/SharpHound
+
 #>
 
 [CmdletBinding()]
 param(
 
-    # -Debug option is built-in to CmdletBinding but causes halts, so making our own
     [switch]$DebugMode,
+
+    [switch]$Help,
 
     # Validate that the log file path exists or is set to "none"
     [ValidateScript({
@@ -70,7 +107,8 @@ param(
 
 # If there are undefined parameters, throw an error
 $definedParams = @(
-    "DebugMode", 
+    "DebugMode",
+    "Help", 
     "LogFilePath", 
     "OutputToShare", 
     "SessionLookbackDays", 
@@ -82,6 +120,12 @@ $undefinedParams = $PSBoundParameters.Keys | Where-Object { -not ($definedParams
 
 if ($undefinedParams -ne $null -and $undefinedParams.Count -gt 0) {
     throw "Undefined parameters: $($undefinedParams -join ', ')"
+}
+
+# Display help text
+if ($Help) {
+    Get-Help $MyInvocation.MyCommand.Path
+    exit
 }
 
 # Initialize logging
