@@ -241,8 +241,8 @@ try {
     $eventIDs = 4624, 4648
 
     foreach ($eventID in $eventIDs) {
-        # Enumerate logon events in the specified window, discard Verbose output stream
-        $events = Get-WinEvent -FilterHashtable @{Logname='Security';ID=$eventID;StartTime=$sessionLookbackStartDate} 4>$null
+        # Enumerate logon events in the specified window
+        $events = Get-WinEvent -FilterHashtable @{Logname='Security';ID=$eventID;StartTime=$sessionLookbackStartDate} 
 
         foreach ($event in $events) {
             $eventXML = [xml]$event.ToXml()
