@@ -10,7 +10,7 @@ Purpose:
 Requirements:
   - Local Administrators group privileges
   - Domain-joined machine with line of sight to domain controller
-  - PowerShell v2 or higher
+  - PowerShell 2.0 or higher
   - .NET Framework 3.5 or higher
 
 .PARAMETER DebugMode
@@ -35,7 +35,7 @@ Enable verbose logging of script execution events.
 Specifies the output file path for results or 'stdout' to write to the console.
 
 .EXAMPLE
-.\FETCH.ps1 -Help                    
+.\FETCH.ps1 -Help
 # Display help text
 
 .EXAMPLE
@@ -87,7 +87,7 @@ param(
 
     # Number of days behind to fetch sessions
     [ValidateRange(1,365)]
-    [int]$SessionLookbackDays = 7, 
+    [int]$SessionLookbackDays = 7,
 
     # Enable trace logging for debugging (WARNING: This may take a long time)
     [switch]$Trace,
@@ -104,23 +104,6 @@ param(
     })]
     [string]$WriteTo = "C:\Windows\CCM\ScriptStore\FetchResults.json"
 )
-
-# If there are undefined parameters, throw an error
-$definedParams = @(
-    "DebugMode",
-    "Help", 
-    "LogFilePath", 
-    "OutputToShare", 
-    "SessionLookbackDays", 
-    "Trace",
-    "Verbose",
-    "WriteTo")
-
-$undefinedParams = $PSBoundParameters.Keys | Where-Object { -not ($definedParams -contains $_) }
-
-if ($undefinedParams -ne $null -and $undefinedParams.Count -gt 0) {
-    throw "Undefined parameters: $($undefinedParams -join ', ')"
-}
 
 # Display help text
 if ($Help) {
@@ -186,7 +169,7 @@ try {
     }
 
     # Confirm this is running in a high integrity context
-    if (-not (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 
+    if (-not (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Write-Error "[!] This script must be executed with administrator privileges. Exiting."
         exit 1
     }
@@ -202,7 +185,7 @@ try {
     Write-DebugVar thisComputerDomainAccount
 
     try {
-        $thisComputerDomainSID = $thisComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value  
+        $thisComputerDomainSID = $thisComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
         Write-DebugVar thisComputerDomainSID
     } catch {
         Write-DebugInfo "Could not translate the domain account to a SID: $sourceComputerDomainAccount"
@@ -240,7 +223,6 @@ try {
             Write-DebugVar existingSession
 
         } else {
-            
             # If no session with the same UserSID and ComputerSID is found, add the session to the script output
             $collectedSessions.Value += $newSession
             Write-DebugVar newSession
@@ -286,7 +268,7 @@ try {
 
     foreach ($eventID in $eventIDs) {
         # Enumerate logon events in the specified window
-        $events = Get-WinEvent -FilterHashtable @{Logname='Security';ID=$eventID;StartTime=$sessionLookbackStartDate} 
+        $events = Get-WinEvent -FilterHashtable @{Logname='Security';ID=$eventID;StartTime=$sessionLookbackStartDate}
 
         foreach ($event in $events) {
             $eventXML = [xml]$event.ToXml()
@@ -304,13 +286,13 @@ try {
                     Write-DebugVar sourceIPAddress
                     $targetUserSID = $eventData | Where-Object { $_.Name -eq 'TargetUserSid' } | Select-Object -ExpandProperty '#text'
                     Write-DebugVar targetUserSID
-                    
+
                     # Collect domain user logon sessions (discard local users)
                     if ($targetUserSID -like "S-1-5-21-*" -and $targetUserSID -notlike "$thisComputerMachineSID*") {
-                       
+
                         # Collect sessions initiated from remote hosts (Logon Type 3: Network)
                         if ($sourceIPAddress -match "^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$") {
-                            
+
                             # Resolve the source IP address to a hostname, discarding non-terminating errors (failed resolution)
                             $sourceComputerName = $null
                             try {
@@ -318,7 +300,7 @@ try {
                                 Write-DebugVar sourceComputerName
                             } catch {
                                 # Ignore failed DNS lookups
-                                Write-DebugInfo "Could not resolve IP to hostname: $sourceIPAddress"                                
+                                Write-DebugInfo "Could not resolve IP to hostname: $sourceIPAddress"
                             }
 
                             # Translate the hostname to a domain SID
@@ -333,7 +315,7 @@ try {
                                     Write-DebugVar sourceComputerDomainSID
                                 }
                             } catch {
-                                Write-DebugInfo "Could not translate the account to a SID: $sourceComputerDomainAccount"                                
+                                Write-DebugInfo "Could not translate the account to a SID: $sourceComputerDomainAccount"
                             }
                         }
                         elseif ($sourceIPAddress) {
@@ -345,10 +327,10 @@ try {
                             $sourceComputerDomainSID = $thisComputerDomainSID
                             Write-DebugInfo "No source IP address, setting sourceComputerDomainSID to thisComputerDomainSID since this is a local logon"
                         }
-                        
+
                         # If the source IP address (e.g., public IPs) or SID couldn't be resolved, discard the session because we can't tell where it came from
-                        if ($sourceComputerDomainSID -ne $null) {
-                            
+                        if ($null -ne $sourceComputerDomainSID) {
+
                             # Otherwise, create a record for this domain user session
                             $newSession = @{
                                 UserSID = $targetUserSID
@@ -378,7 +360,7 @@ try {
                     # Convert TargetUserName and TargetDomainName to domain SID
                     $targetUserDomainAccount = New-Object System.Security.Principal.NTAccount("$targetDomainName\$targetUserName")
                     Write-DebugVar targetUserDomainAccount
-                    
+
                     try {
                         $targetUserDomainSID = $targetUserDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
                         Write-DebugVar targetUserDomainSID
@@ -388,7 +370,7 @@ try {
 
                     # Collect domain user logon sessions on this host that did not originate from SYSTEM, discarding local users
                     if ($targetUserDomainSID -like "S-1-5-21-*" -and $targetUserDomainSID -notlike "$thisComputerMachineSID*" -and $targetUserDomainSID -ne $thisComputerDomainSID) {
-                        
+
                         # Create a record for this domain user session
                         $newSession = @{
                             UserSID = $targetUserDomainSID
@@ -437,15 +419,15 @@ try {
 
     foreach ($line in $userRightsLines) {
         # Split SIDs from rights assignments
-        $lineParts = $line -split "=" 
+        $lineParts = $line -split "="
         $right = $lineParts[0].Trim()
         # Split SIDs into a list
-        $sids = $lineParts[1].Trim() -split "," 
+        $sids = $lineParts[1].Trim() -split ","
         $sids = $sids | ForEach-Object {
             # Remove leading asterisk from each SID
             $sid = $_ -replace "^\*", ""
             # Replace built-in local group SIDs with domain computer SID
-            $sid = $sid -replace "S-1-5-32", $thisComputerDomainSID  
+            $sid = $sid -replace "S-1-5-32", $thisComputerDomainSID
             @{
                 "ObjectIdentifier" = $sid
                 "ObjectType" = "LocalGroup"
@@ -469,7 +451,7 @@ try {
     Collect local group memberships
     -------------------------------------------
     #>
- 
+
     $groups = @()
     $currentGroup = $null
 
@@ -518,13 +500,13 @@ try {
 
                 # Start with null output
                 $result = $null
-                
+
                 # Retrieve the class of the member to ensure it's a User
                 $memberClass = $member.GetType().InvokeMember("Class", 'GetProperty', $null, $member, $null)
                 Write-DebugVar memberClass
 
                 # Retrieve name and SID and convert the SID to human-readable format
-                $memberName = $member.GetType().InvokeMember("Name", 'GetProperty', $null, $member, $null) 
+                $memberName = $member.GetType().InvokeMember("Name", 'GetProperty', $null, $member, $null)
                 Write-DebugVar memberName
                 $memberSIDBytes = $member.GetType().InvokeMember("objectSid", 'GetProperty', $null, $member, $null)
                 Write-DebugVar memberSIDBytes
@@ -537,7 +519,7 @@ try {
 
                         # Default groups with well-known SIDs
                         if ($memberSID.Length -lt 14) {
-                            
+
                             # Replace built-in local group SIDs with domain computer SID
                             if ($memberSID -like "S-1-5-32-*") {
                                 $memberType = "LocalGroup"
@@ -547,9 +529,7 @@ try {
                                 }
 
                             # Everyone and Authenticated Users include domain users, so collect them
-                            } 
-                            
-                            elseif ($memberSID -eq "S-1-1-0" -or $memberSID -eq "S-1-5-11") {
+                            } elseif ($memberSID -eq "S-1-1-0" -or $memberSID -eq "S-1-5-11") {
                                 $memberType = "Group"
                                 $result = @{
                                     "ObjectIdentifier" = "$($thisComputerDomain.ToUpper())-$memberSID"
@@ -598,14 +578,14 @@ try {
                                 "ObjectIdentifier" = $memberSID
                                 "ObjectType" = $memberType
                             }
-                        } 
-                    }     
+                        }
+                    }
                 }
                 Write-DebugVar result
                 if ($result) {
                     $currentGroup["Results"] += $result
                     Write-DebugVar currentGroup
-                }                       
+                }
             }
             # Add each local group to script output
             $groups += $currentGroup
@@ -651,9 +631,8 @@ try {
         param (
             [hashtable] $hash
         )
-    
         $output = ""
-    
+
         function Convert-Item ($item) {
             if ($item -is [string]) {
                 return '"' + $item + '"'
@@ -676,13 +655,13 @@ try {
                 return 'null'
             }
         }
-    
+
         $hash.Keys | ForEach-Object {
             $key = $_
             $value = $hash[$key]
             $output += ('"' + $key + '":' + (Convert-Item $value) + ',')
         }
-    
+
         # Remove trailing comma and wrap with curly braces
         return '{' + $output.TrimEnd(",") + '}'
     }
@@ -706,7 +685,7 @@ try {
             }
             # Use the computer's domain SID in output files written to network shares
             $WriteTo = Join-Path -Path $todaysDirectory -ChildPath "$($thisComputerDomainSID)_$((Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')).json"
-            Write-DebugVar WriteTo     
+            Write-DebugVar WriteTo
         }
         $jsonOutput | Out-File $WriteTo
     }
