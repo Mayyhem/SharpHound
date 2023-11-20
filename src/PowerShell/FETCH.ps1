@@ -25,6 +25,9 @@ Specifies a UNC path to output data. Leave empty to output to a local file or st
 .PARAMETER SessionLookbackDays
 Number of days to look back for sessions. Default is 7.
 
+.PARAMETER TempDir
+Specifies the path for temporary files created to enumerate user rights. Default is $env:TEMP.
+
 .PARAMETER Trace
 Enables trace logging for detailed debugging. This will significantly slow down execution.
 
@@ -88,6 +91,16 @@ param(
     # Number of days behind to fetch sessions
     [ValidateRange(1,365)]
     [int]$SessionLookbackDays = 7,
+
+    # Write temporary files to a specific directory instead of %TEMP%
+    [ValidateScript({
+        if ([string]::IsNullOrEmpty($_) -or $_ -eq "none" -or (Test-Path $_)) {
+            $true
+        } else {
+            throw "The specified directory does not exist: $_"
+        }
+    })]
+    [string]$TempDir = $env:TEMP,
 
     # Enable trace logging for debugging (WARNING: This may take a long time)
     [switch]$Trace,
@@ -401,14 +414,14 @@ try {
     #>
 
     # Export the security configuration to a file, discarding non-terminating errors to prevent stdout pollution
-    secedit /export /areas USER_RIGHTS /cfg "C:\Windows\Temp\secedit.cfg" > $null 2>&1
+    secedit /export /areas USER_RIGHTS /cfg "$TempDir\secedit.cfg" > $null 2>&1
 
     # Read the contents of the exported file
-    $seceditContents = Get-Content "C:\Windows\Temp\secedit.cfg" | Out-String
+    $seceditContents = Get-Content "$TempDir\secedit.cfg" | Out-String
     Write-DebugVar seceditContents
 
     # Remove the exported file
-    Remove-Item "C:\Windows\Temp\secedit.cfg"
+    Remove-Item "$TempDir\secedit.cfg"
 
     # Extract and format user rights assignments from the secedit output
     $userRightsLines = $seceditContents -split "`r`n" | Where-Object { $_ -like "SeRemoteInteractiveLogonRight*" }
