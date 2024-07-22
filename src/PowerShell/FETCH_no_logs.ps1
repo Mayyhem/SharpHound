@@ -241,7 +241,7 @@ try {
             Write-DebugVar newSession
         }
     }
-
+<#
     # Get logged in accounts from HKEY_USERS hive
     $registryKeys = Get-Item -Path "registry::HKEY_USERS\*"
     Write-DebugVar registryKeys
@@ -272,6 +272,38 @@ try {
         }
     }
     Write-DebugVar collectedSessions
+#>
+    # Get historic logon data from root\cimv2\sms\SMS_UserLogonEvents
+    $lookbackPeriodFormatted = [int64]((Get-Date).AddDays(-$SessionLookbackDays) - (Get-Date "1970-01-01 00:00:00")).TotalSeconds
+
+    $query = "SELECT * FROM SMS_UserLogonEvents WHERE LogonTime >= '$lookbackPeriodFormatted'"
+    $events = Get-WmiObject -Namespace "root\cimv2\sms" -Query $query
+    Write-DebugVar events
+
+    # Check if any events were returned
+    if ($events) {
+        # Process and display the events
+        $events | ForEach-Object {
+            $logonTime =(Get-Date "1970-01-01 00:00:00").AddSeconds($_.LogonTime).ToUniversalTime()
+            $userSID = $_.UserSID
+
+            # Discard local users
+            if ($userSID -notlike "$thisComputerMachineSID*") {
+
+                # Create a record for each domain user session
+                $newSession = @{
+                    UserSID = $userSID
+                    ComputerSID = $thisComputerDomainSID
+                    LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $logonTime
+                }
+                AddOrUpdateSessions ([ref]$collectedSessions) $newSession | Out-Null
+            } else {
+                Write-DebugInfo "Discarding local user with SID: $hkuSID"
+            }
+        }
+    } else {
+        Write-DebugInfo "No logon events found in the lookback period."
+    }
 
     $sessions = @{
         "Results" = $collectedSessions
