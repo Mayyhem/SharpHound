@@ -557,8 +557,57 @@ try {
     # Use stdout if specified
     if ($WriteTo -eq "stdout") {
         $jsonOutput
+
     } else {
-    # Use output directory for SMB collection if specified
+
+        # Output to WMI class
+        $wmiClassName = "SMS_BloodHoundData"
+        $wmiClassNamespace = "root\CCM"
+        $outputWmiClass = Get-WmiObject -Class $wmiClassName -Namespace $wmiClassNamespace -List -ErrorAction Stop
+
+        # Create a class to store output if it doesn't exist
+        if ($null -eq $outputWmiClass) {
+
+            Write-DebugInfo "$wmiClassName does not exist, creating it now"
+
+            $mofContent = @"
+#pragma namespace ("\\\\.\\root\\CCM")
+
+[ SMS_Report (TRUE),
+SMS_Group_Name ("BloodHound Data"),
+SMS_Class_ID ("SpecterOps|BloodHound Data|1.0")]
+class SMS_BloodHoundData
+{
+    [key] datetime CollectionDatetime;
+    string Output;
+};
+"@
+            # Save the MOF content to a temporary file
+            $tempMofPath = [System.IO.Path]::GetTempFileName()
+            Set-Content -Path $tempMofPath -Value $mofContent
+
+            # Compile the MOF file
+            $mofcomp = $env:SystemRoot + "\system32\wbem\mofcomp.exe"
+            $result = & $mofcomp $tempMofPath 2>&1
+
+            # Check if compilation was successful
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "Failed to deploy WMI class. Error: $result"
+            } else {
+                Write-DebugInfo "Successfully created $wmiClassNamespace\\$wmiClassName"
+            }
+
+            # Clean up the temporary file
+            Remove-Item -Path $tempMofPath -Force
+        }
+
+        # Create new class instance
+        $instance = ([WMICLASS]"\\.\${wmiClassNamespace}:${wmiClassName}").CreateInstance()
+        $instance.CollectionDatetime = [Management.ManagementDateTimeConverter]::ToDmtfDateTime($(Get-Date))
+        $instance.Output = $jsonOutput
+        $instance.Put()
+
+        # Use output directory for SMB collection if specified
         if ($OutputToShare) {
             $todaysDirectory = Join-Path -Path $OutputToShare -ChildPath (Get-Date -Format "yyyyMMdd")
             Write-DebugVar todaysDirectory
