@@ -511,14 +511,28 @@ namespace Sharphound
                     }
 
                     // SCCM collection
+                    if (!string.IsNullOrEmpty(options.SccmDatabase) && !string.IsNullOrEmpty(options.SccmSiteCode))
+                    {
+                        List<JObject> fetchResults = await Fetch.QuerySiteDatabase(options.SccmDatabase, options.SccmSiteCode);
+
+                        if (fetchResults != null)
+                        {
+                            await APIClient.SendItAsync(fetchResults);
+                        }
+                        else
+                        {
+                            logger.LogError($"The site database ({options.SccmDatabase}) did not respond with FETCH data");
+                        }
+                    }
+
                     if (!string.IsNullOrEmpty(options.SccmServer) && !string.IsNullOrEmpty(options.SccmSiteCode) && !string.IsNullOrEmpty(options.SccmCollectionId))
                     {
                         JObject cmPivotResponse = await Fetch.QuerySccmAdminService(options.SccmServer, options.SccmSiteCode, options.SccmCollectionId, options.FetchResultsFile, options.FetchTimeout);
-                        List<JObject> cmPivotResults = Fetch.PrepareCMPivotQueryResults(cmPivotResponse);
+                        List<JObject> fetchResults = Fetch.PrepareCMPivotQueryResults(cmPivotResponse);
 
-                        if (cmPivotResponse != null)
+                        if (fetchResults != null)
                         {
-                            await APIClient.SendItAsync(cmPivotResults);
+                            await APIClient.SendItAsync(fetchResults);
                         }
                         else
                         {

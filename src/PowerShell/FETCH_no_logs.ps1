@@ -16,8 +16,17 @@ Requirements:
 .PARAMETER DebugMode
 Use this switch to enable debug mode.
 
-.PARAMETER LogFilePath
-Specifies the path to the log file. Default is 'C:\Windows\CCM\ScriptStore\FetchExecution.log'.
+.PARAMETER LogFile
+Specify a file path to store logs. Default is 'C:\Windows\CCM\ScriptStore\FetchExecution.log'.
+
+.PARAMETER NoWmiOutput
+Do not store results in the local WMI repository.
+
+.PARAMETER OutputFile
+Specify a file path to store results.
+
+.PARAMETER StdOut
+Write results to the console.
 
 .PARAMETER OutputToShare
 Specifies a UNC path to output data. Leave empty to output to a local file or stdout.
@@ -69,7 +78,7 @@ param(
             throw "The specified directory does not exist: $(Split-Path -Path $_)"
         }
     })]
-    [string]$LogFilePath = "C:\Windows\CCM\ScriptStore\FetchExecution.log",
+    [string]$LogFile = "C:\Windows\CCM\ScriptStore\FetchExecution.log",
 
     # Validate that the output directory path is a UNC path if used, ignored if WriteTo is stdout
     [ValidateScript({
@@ -127,15 +136,14 @@ if ($Help) {
 # Initialize logging
 function Write-Log {
     param([string]$Message)
-    if ($LogFilePath -ne "none" -and $LogFilePath) {
+    if ($LogFile -and $LogFile -ne "none") {
         # Construct the log message with the current UTC time and write to specified file
-        $nowTimeStamp = "$((Get-Date).ToUniversalTime()) UTC"
-        $logEntry = "$nowTimeStamp - $Message"
-        $logEntry | Out-File -FilePath $LogFilePath -Append
+        $logEntry = "$((Get-Date).ToUniversalTime()) UTC - $Message"
+        $logEntry | Out-File -FilePath $LogFile -Append
     }
 }
 
-# Trace logging - display lines as they are executed
+# Trace logging - display lines as they are executed and store transcript
 if ($Trace) {
     Set-PSDebug -Trace 1
     Start-Transcript -Path "FetchTrace_$((Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss"))-UTC.log"
@@ -144,8 +152,8 @@ if ($Trace) {
 
 # Debug logging - display variable values
 if ($DebugMode) {
-    $originalDebugPreference = $DebugPreference
-    $DebugPreference = 'Continue'
+    #$originalDebugPreference = $DebugPreference
+    $Script:DebugPreference = 'Continue'
     #$VerbosePreference = 'Continue'
 }
 
@@ -159,6 +167,17 @@ function Write-DebugVar {
     Write-Debug "$((Get-Date).ToUniversalTime()) UTC, Line $($MyInvocation.ScriptLineNumber): `$${VariableName} = $(Get-Variable -Name $VariableName -ValueOnly | Out-String)"
 }
 
+function Write-ErrorInfo {
+    param([string]$Message)
+    # Capture in transcript if in debug/trace mode
+    if ($DebugMode) {
+        Write-DebugInfo $Message
+    } else {
+        Write-Error "$((Get-Date).ToUniversalTime()) UTC, Line $($MyInvocation.ScriptLineNumber): $Message"
+        Write-Log $Message
+    }
+}
+
 function Write-VerboseInfo {
     param([string]$Message)
     # Capture in transcript if in debug/trace mode
@@ -170,6 +189,17 @@ function Write-VerboseInfo {
     }
 }
 
+function Write-WarningInfo {
+    param([string]$Message)
+    # Capture in transcript if in debug/trace mode
+    if ($DebugMode) {
+        Write-DebugInfo $Message
+    } else {
+        Write-Warning "$((Get-Date).ToUniversalTime()) UTC, Line $($MyInvocation.ScriptLineNumber): $Message"
+        Write-Log $Message
+    }
+}
+
 Write-VerboseInfo "FETCH execution started"
 
 # Catch and log unexpected execution error messages
@@ -177,13 +207,13 @@ try {
 
     # Confirm this is running on a domain-joined machine
     if (-not (Get-WmiObject Win32_ComputerSystem).PartOfDomain) {
-        Write-Error "[!] This system is not joined to Active Directory. Exiting."
+        Write-ErrorInfo "This system is not joined to Active Directory. Exiting."
         exit 1
     }
 
     # Confirm this is running in a high integrity context
     if (-not (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Error "[!] This script must be executed with administrator privileges. Exiting."
+        Write-ErrorInfo "[!] This script must be executed with administrator privileges. Exiting."
         exit 1
     }
 
@@ -241,7 +271,7 @@ try {
             Write-DebugVar newSession
         }
     }
-<#
+
     # Get logged in accounts from HKEY_USERS hive
     $registryKeys = Get-Item -Path "registry::HKEY_USERS\*"
     Write-DebugVar registryKeys
@@ -272,7 +302,7 @@ try {
         }
     }
     Write-DebugVar collectedSessions
-#>
+
     # Get historic logon data from root\cimv2\sms\SMS_UserLogonEvents
     $lookbackPeriodFormatted = [int64]((Get-Date).AddDays(-$SessionLookbackDays) - (Get-Date "1970-01-01 00:00:00")).TotalSeconds
 
@@ -602,6 +632,7 @@ try {
 
             Write-DebugInfo "$wmiClassName does not exist, creating it now"
 
+            # MaxLen set to unsigned 32-bit integer maximum
             $mofContent = @"
 #pragma namespace ("\\\\.\\root\\CCM")
 
@@ -610,27 +641,34 @@ SMS_Group_Name ("BloodHound Data"),
 SMS_Class_ID ("SpecterOps|BloodHound Data|1.0")]
 class SMS_BloodHoundData
 {
-    [key] datetime CollectionDatetime;
+    [key] 
+    datetime CollectionDatetime;
+
+    [MaxLen(4294967295)]
     string Output;
 };
 "@
             # Save the MOF content to a temporary file
-            $tempMofPath = [System.IO.Path]::GetTempFileName()
-            Set-Content -Path $tempMofPath -Value $mofContent
+            do {
+                $randomPart = [System.IO.Path]::GetRandomFileName().Split('.')[0]
+                $tempFilePath = Join-Path -Path $TempDir -ChildPath "temp-$randomPart.$Extension"
+            } while (Test-Path -Path $tempFilePath)
+
+            Set-Content -Path $tempFilePath -Value $mofContent
 
             # Compile the MOF file
             $mofcomp = $env:SystemRoot + "\system32\wbem\mofcomp.exe"
-            $result = & $mofcomp $tempMofPath 2>&1
+            $result = & $mofcomp $tempFilePath 2>&1
 
             # Check if compilation was successful
             if ($LASTEXITCODE -ne 0) {
-                Write-Error "Failed to deploy WMI class. Error: $result"
+                Write-ErrorInfo "Failed to deploy WMI class. Error: $result"
             } else {
                 Write-DebugInfo "Successfully created $wmiClassNamespace\\$wmiClassName"
             }
 
             # Clean up the temporary file
-            Remove-Item -Path $tempMofPath -Force
+            Remove-Item -Path $tempFilePath -Force
         }
 
         # Create new class instance
@@ -638,6 +676,33 @@ class SMS_BloodHoundData
         $instance.CollectionDatetime = [Management.ManagementDateTimeConverter]::ToDmtfDateTime($(Get-Date))
         $instance.Output = $jsonOutput
         $instance.Put()
+
+        # Delete old data
+        $instances = Get-WmiObject -Namespace $wmiClassNamespace -Class $wmiClassName -ErrorAction Stop
+
+        # Check if there are more than 10 instances
+        if ($instances.Count -gt 5) {
+            Write-DebugInfo "Found $($instances.Count) instances. Keeping the 5 most recent."
+
+            # Sort instances by CollectionDatetime property in descending order and skip the first 10
+            $instancesToDelete = $instances | Sort-Object -Property CollectionDatetime -Descending | Select-Object -Skip 10
+
+            # Delete older instances
+            foreach ($instance in $instancesToDelete) {
+                try {
+                    $instance.Delete()
+                    Write-VerboseInfo "Deleted instance with CollectionDatetime: $($instance.CollectionDatetime)"
+                }
+                catch {
+                    Write-WarningInfo "Failed to delete instance with CollectionDatetime: $($instance.CollectionDatetime). Error: $_"
+                }
+            }
+
+            Write-VerboseInfo "Cleanup complete. Remaining instances: $((Get-WmiObject -Namespace $wmiClassNamespace -Class $wmiClassName).Count)"
+        }
+        else {
+            Write-VerboseInfo "Found no instances. No cleanup needed."
+        }
 
         # Use output directory for SMB collection if specified
         if ($OutputToShare) {
@@ -658,7 +723,7 @@ class SMS_BloodHoundData
     }
 
 } catch {
-    Write-DebugInfo "FETCH encountered an error at line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
+    Write-ErrorInfo "FETCH encountered an error at line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
     Write-Log "FETCH encountered an error at line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
 
 } finally {
@@ -666,9 +731,9 @@ class SMS_BloodHoundData
     Write-VerboseInfo "FETCH execution completed"
 
     # Restore debug logging preference
-    if ($DebugMode) {
-        $DebugPreference = $originalDebugPreference
-    }
+    #if ($DebugMode) {
+    #    $DebugPreference = $originalDebugPreference
+    #}
 
     # Disable trace logging
     if ($Trace) {

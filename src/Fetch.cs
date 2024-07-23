@@ -1,8 +1,8 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using SharpHoundRPC;
 using System;
 using System.Collections.Generic;
+using System.Data.SqlClient;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -20,74 +20,33 @@ namespace Sharphound
 {
     public class Fetch
     {
-        public static async Task<JObject> QuerySccmAdminService(string smsProvider, string siteCode, string collectionId, string fetchResultsFile, int fetchTimeout)
+        public static ManagementScope NewWmiConnection(string server, string wmiNamespace)
         {
-            int operationId = GetSccmOperationIdForQuery(smsProvider, siteCode, collectionId, fetchResultsFile);
+            ConnectionOptions connection = new ConnectionOptions();
+            ManagementScope wmiConnection = null;
 
-            if (operationId != 0)
+            try
             {
-                int attemptCounter = 1;
-                int maxAttempts = 0;
-                if (fetchTimeout > 0)
+                if (!string.IsNullOrEmpty(wmiNamespace))
                 {
-                    // User supplied timeout from minutes to seconds with 1 request every 10 seconds
-                    maxAttempts = fetchTimeout * 60 / 10;
-                }
-                int status = 0;
-                string url = $"https://{smsProvider}/AdminService/v1.0/Collections('{collectionId}')/AdminService.CMPivotResult(OperationId={operationId})";
-
-                // Trust self-signed certificates on SMS Providers
-                var clientHandler = new HttpClientHandler();
-                clientHandler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true;
-                clientHandler.UseDefaultCredentials = true;
-
-                var client = new HttpClient(clientHandler);
-                HttpResponseMessage response = null;
-                Console.WriteLine($"[+] Querying for CMPivot operation results at {url}");
-
-                // Loop infinitely or until the provided timeout is reached, checking for results every 10 seconds
-                while (attemptCounter <= maxAttempts || fetchTimeout == 0)
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(10));
-                    Console.WriteLine($"[+] Checking whether CMPivot has finished querying clients: attempt {attemptCounter} of {(maxAttempts > 0 ? maxAttempts : "∞")}");
-                    response = await client.GetAsync(url);
-                    status = (int)response.StatusCode;
-
-                    if (status != 200)
-                    {
-                        attemptCounter++;
-                        Console.WriteLine("[+] Trying again in 10 seconds");
-                    }
-                    else
-                    {
-                        Console.WriteLine("[+] Successfully retrieved CMPivot results from AdminService");
-                        break;
-                    }
-                }
-
-                if (status == 200)
-                {
-                    // Deserialize the received JSON
-                    var responseBody = await response.Content.ReadAsStringAsync();
-                    var jsonBody = responseBody.Replace("\\r\\n\\r\\n", Environment.NewLine);
-                    var jsonObject = JsonConvert.DeserializeObject<JObject>(jsonBody);
-
-                    // Here we display the output as JSON after the user supplies the required flag
-                    Console.WriteLine(jsonObject.ToString());
-                    return jsonObject;
-                }
-                else if (status == 404)
-                {
-                    Console.WriteLine("[!] Could not collect FETCH results before FetchTimeout was reached");
-                    Console.WriteLine("[+] This could mean that the device is not online or the timeout value is too short");
-                    Console.WriteLine($"[+] When they are ready, the results can be retrieved manually from {url}");
+                    wmiConnection = new ManagementScope(wmiNamespace, connection);
+                    Console.WriteLine($"[+] Connecting to {wmiConnection.Path}");
+                    wmiConnection.Connect();
                 }
             }
-            else
+            catch (UnauthorizedAccessException ex)
             {
-                Console.WriteLine("[!] Could not successfully create an operation via the AdminService API");
+                Console.WriteLine($"[!] Access to the WMI provider was not authorized: {ex.Message.Trim()}");
             }
-            return null;
+            catch (ManagementException ex)
+            {
+                Console.WriteLine($"[!] Could not connect to {wmiNamespace}: " + ex.Message);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"An unhandled exception of type {ex.GetType()} occurred: {ex.Message}");
+            }
+            return wmiConnection;
         }
 
         public static int InitiateSccmClientOperationExMethodCall(string query, string smsProvider, string collectionId, string deviceId, string siteCode)
@@ -148,35 +107,6 @@ namespace Sharphound
                 Console.WriteLine("[!] An error occurred while attempting to call the SMS Provider: " + ex.Message);
                 return 0;
             }
-        }
-
-        public static ManagementScope NewWmiConnection(string server, string wmiNamespace)
-        {
-            ConnectionOptions connection = new ConnectionOptions();
-            ManagementScope wmiConnection = null;
-
-            try
-            {
-                if (!string.IsNullOrEmpty(wmiNamespace))
-                {
-                    wmiConnection = new ManagementScope(wmiNamespace, connection);
-                    Console.WriteLine($"[+] Connecting to {wmiConnection.Path}");
-                    wmiConnection.Connect();
-                }
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                Console.WriteLine($"[!] Access to the WMI provider was not authorized: {ex.Message.Trim()}");
-            }
-            catch (ManagementException ex)
-            {
-                Console.WriteLine($"[!] Could not connect to {wmiNamespace}: " + ex.Message);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"An unhandled exception of type {ex.GetType()} occurred: {ex.Message}");
-            }
-            return wmiConnection;
         }
 
         public static int GetSccmOperationIdForQuery(string smsProvider, string siteCode, string collectionId, string fetchResultsFile)
@@ -350,6 +280,152 @@ namespace Sharphound
                 Console.WriteLine($"[!] An error occurred: {ex.Message}");
             }
             return fetchResults;
+        }
+
+        public static async Task<JObject> QuerySccmAdminService(string smsProvider, string siteCode, string collectionId, string fetchResultsFile, int fetchTimeout)
+        {
+            int operationId = GetSccmOperationIdForQuery(smsProvider, siteCode, collectionId, fetchResultsFile);
+
+            if (operationId != 0)
+            {
+                int attemptCounter = 1;
+                int maxAttempts = 0;
+                if (fetchTimeout > 0)
+                {
+                    // User supplied timeout from minutes to seconds with 1 request every 10 seconds
+                    maxAttempts = fetchTimeout * 60 / 10;
+                }
+                int status = 0;
+                string url = $"https://{smsProvider}/AdminService/v1.0/Collections('{collectionId}')/AdminService.CMPivotResult(OperationId={operationId})";
+
+                // Trust self-signed certificates on SMS Providers
+                var clientHandler = new HttpClientHandler();
+                clientHandler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true;
+                clientHandler.UseDefaultCredentials = true;
+
+                var client = new HttpClient(clientHandler);
+                HttpResponseMessage response = null;
+                Console.WriteLine($"[+] Querying for CMPivot operation results at {url}");
+
+                // Loop infinitely or until the provided timeout is reached, checking for results every 10 seconds
+                while (attemptCounter <= maxAttempts || fetchTimeout == 0)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(10));
+                    Console.WriteLine($"[+] Checking whether CMPivot has finished querying clients: attempt {attemptCounter} of {(maxAttempts > 0 ? maxAttempts : "∞")}");
+                    response = await client.GetAsync(url);
+                    status = (int)response.StatusCode;
+
+                    if (status != 200)
+                    {
+                        attemptCounter++;
+                        Console.WriteLine("[+] Trying again in 10 seconds");
+                    }
+                    else
+                    {
+                        Console.WriteLine("[+] Successfully retrieved CMPivot results from AdminService");
+                        break;
+                    }
+                }
+
+                if (status == 200)
+                {
+                    // Deserialize the received JSON
+                    var responseBody = await response.Content.ReadAsStringAsync();
+                    var jsonBody = responseBody.Replace("\\r\\n\\r\\n", Environment.NewLine);
+                    var jsonObject = JsonConvert.DeserializeObject<JObject>(jsonBody);
+
+                    // Here we display the output as JSON after the user supplies the required flag
+                    Console.WriteLine(jsonObject.ToString());
+                    return jsonObject;
+                }
+                else if (status == 404)
+                {
+                    Console.WriteLine("[!] Could not collect FETCH results before FetchTimeout was reached");
+                    Console.WriteLine("[+] This could mean that the device is not online or the timeout value is too short");
+                    Console.WriteLine($"[+] When they are ready, the results can be retrieved manually from {url}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("[!] Could not successfully create an operation via the AdminService API");
+            }
+            return null;
+        }
+
+        public static async Task<List<JObject>> QuerySiteDatabase(string siteDatabaseFqdn, string siteCode)
+        {
+            string connectionString = $"Server={siteDatabaseFqdn};Database=CM_{siteCode};Integrated Security=True;";
+
+            // Get most recent collection for each MachineID
+            string query = @"
+            WITH LatestCollections AS (
+                SELECT 
+                    MachineID,
+                    CollectionDatetime00,
+                    Output00,
+                    ROW_NUMBER() OVER (PARTITION BY MachineID ORDER BY CollectionDatetime00 DESC) as RowNum
+                FROM SpecterOps_BloodHound_Data_DATA
+            )
+            SELECT 
+                LC.MachineID,
+                LC.CollectionDatetime00,
+                LC.Output00,
+                SD.SID0,
+                SD.Netbios_Name0,
+                SD.Full_Domain_Name0
+            FROM LatestCollections LC
+            LEFT JOIN System_DISC SD ON LC.MachineID = SD.ItemKey
+            WHERE LC.RowNum = 1
+            ORDER BY LC.CollectionDatetime00 DESC";
+
+            using (SqlConnection connection = new SqlConnection(connectionString))
+            {
+                try
+                {
+                    await connection.OpenAsync();
+
+                    using (SqlCommand command = new SqlCommand(query, connection))
+                    {
+                        using (SqlDataReader reader = await command.ExecuteReaderAsync())
+                        {
+                            var results = new List<JObject>();
+
+                            while (await reader.ReadAsync())
+                            {
+                                string computerSid = reader.GetString(3);
+                                string computerFqdn = reader.GetString(4) + "." + reader.GetString(5);
+
+                                // Get Output00 for this machine and add to the list of objects to ingest
+                                string output = reader.GetString(2);
+
+                                // Remove escaping for double quotes (e.g., \")
+                                var jsonBody = output.Replace("\\\"", "\"");
+                                var jsonObject = JsonConvert.DeserializeObject<JObject>(jsonBody);
+                                results.Add(jsonObject);
+                            }
+
+                            if (results.Count > 0)
+                            {
+                                Console.WriteLine($"Fetched {results.Count} records.");
+                                return results;
+                            }
+                            else
+                            {
+                                Console.WriteLine("No data found in the table.");
+                            }
+                        }
+                    }
+                }
+                catch (SqlException ex)
+                {
+                    Console.WriteLine($"SQL Error: {ex.Message}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error: {ex.Message}");
+                }
+            }
+            return null;
         }
 
         public class TrustAllCertsPolicy

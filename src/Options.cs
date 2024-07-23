@@ -130,7 +130,7 @@ namespace Sharphound
         public bool CollectAllProperties { get; set; }
 
         // FETCH Options
-        [Option(HelpText = "Number of days behind to collect FETCH results from a remote share", Default = 7)]
+        [Option(HelpText = "Number of days behind to collect FETCH results", Default = 7)]
         public int FetchLookbackDays { get; set; }
 
         [Option(HelpText = "Path to files containing FETCH results", Default = "C:\\Windows\\CCM\\ScriptStore\\FetchResults.json")]
@@ -139,14 +139,18 @@ namespace Sharphound
         [Option(HelpText = "Timeout for SCCM to collect FETCH results in minutes", Default = 0)]
         public int FetchTimeout { get; set; }
 
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) collection ID to retrieve FETCH results from", Default = null)]
+        public string SccmCollectionId { get; set; }
+
         [Option(HelpText = "Specify an SCCM (ConfigMgr) SMS Provider (typically the site server) for collection", Default = null)]
         public string SccmServer { get; set; }
 
         [Option(HelpText = "Specify an SCCM (ConfigMgr) site code for collection", Default = null)]
         public string SccmSiteCode { get; set; }
 
-        [Option(HelpText = "Specify an SCCM (ConfigMgr) collection ID to retrieve FETCH results from", Default = null)]
-        public string SccmCollectionId { get; set; }
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) site database for collection", Default = null)]
+        public string SccmDatabase { get; set; }
+
 
         //Loop Options
         [Option('l', "Loop", HelpText = "Loop computer collection")]
