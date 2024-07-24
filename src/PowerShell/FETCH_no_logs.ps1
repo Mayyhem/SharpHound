@@ -517,7 +517,7 @@ try {
 
         } else {
 
-            Write-Log "VERBOSE" "New session for $($newSession.UserSID) at $($newSession.LastSeen)"
+            Write-Log "VERBOSE" "Found new session for $($newSession.UserSID) at $($newSession.LastSeen)"
             # If no session with the same UserSID and ComputerSID is found, add the session to the script output
             $collectedSessions.Value += $newSession
             Write-DebugVar newSession
@@ -623,6 +623,7 @@ try {
     }
 
     # Export the security configuration to a file, discarding non-terminating errors to prevent stdout pollution
+    Write-Log "VERBOSE" "Exporting user rights assignments with secedit"
     secedit /export /areas USER_RIGHTS /cfg "$TempDir\secedit.cfg" > $null 2>&1
 
     # Read the contents of the exported file
@@ -659,6 +660,23 @@ try {
             "Collected" = $true
             "FailureReason" = $null
         }
+
+        foreach ($sid in $sids) {
+            $objectIdentifier = $sid.ObjectIdentifier
+            $objectType = $sid.ObjectType
+            Write-Log "VERBOSE" "Found $right privilege for $objectType $objectIdentifier)"
+
+            if ($Wmi) {
+                $userRightsAssignment = @{
+                    "Privilege" = $right
+                    "ObjectIdentifier" = $objectIdentifier
+                    "ObjectType" = $objectType
+                }
+            Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType 'UserRights' -Properties $userRightsAssignment
+            }
+        }
+        
+
         $userRights += $userRight
         Write-DebugVar userRight
     }
@@ -815,9 +833,25 @@ try {
                     }
                 }
                 Write-DebugVar result
+
                 if ($result) {
+
+                    Write-Log "VERBOSE" "Found $memberType $memberSID in $($currentGroup.Name) ($($currentGroup.ObjectIdentifier))"
+                   
                     $currentGroup["Results"] += $result
                     Write-DebugVar currentGroup
+
+                    if ($Wmi) {
+                        $localGroupMember = @{
+                            "GroupName" = $currentGroup.Name
+                            "GroupSID" = $currentGroup.ObjectIdentifier
+                            "MemberType" = $memberType
+                            "MemberSID" = $memberSID
+                        }
+                        Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType 'LocalGroups' -Properties $localGroupMember
+                    }
+                } else {
+                    Write-Log "WARNING" "Skipping $memberType $memberSID in $($currentGroup.Name) ($($currentGroup.ObjectIdentifier))"
                 }
             }
             # Add each local group to script output
