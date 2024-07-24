@@ -145,7 +145,7 @@ param(
         }
         $true
     })]
-    [string]$WmiNamespace = "root\cimv2",  
+    [string]$WmiNamespace = "root\cimv2",
 
     # DEPRECATE
     # Validate that the output directory path is a UNC path if used, ignored if WriteTo is stdout
@@ -205,12 +205,12 @@ function Add-WmiClass {
 
         # Add key property
         foreach ($key in $KeyProperty.Keys) {
-            $propertiesFormatted += "[key] $key $($KeyProperty[$key]);`n"
+            $propertiesFormatted += "[key] $($KeyProperty[$key]) $key;`n"
         }
         
         # Add other properties
         $Properties.GetEnumerator() | ForEach-Object {
-            $propertiesFormatted += "$($_.Key) $($_.Value);"
+            $propertiesFormatted += "$($_.Value) $($_.Key);"
         }
 
         $wmiNamespaceFormatted = $WmiNamespace.Replace('\','\\')
@@ -254,18 +254,38 @@ $($propertiesFormatted.TrimEnd("`n"))
 
 function Add-WmiClassInstance {
     param(
+        [Parameter(Mandatory=$true)]
         [string]$WmiNamespace,
+
+        [Parameter(Mandatory=$true)]
         [string]$WmiClassPrefix,
-        [string]$CollectionType
+
+        [Parameter(Mandatory=$true)]
+        [ValidateSet("Sessions", "LocalGroups", "UserRights")]
+        [string]$CollectionType,
+
+        [Parameter(Mandatory=$true)]
+        [hashtable]$Properties
     )
 
-    # Output to WMI class
+    # Construct WMI class name
     $wmiClassName = "$WmiClassPrefix$CollectionType"
 
     # Create new class instance
     $instance = ([WMICLASS]"\\.\${WmiNamespace}:${wmiClassName}").CreateInstance()
+
+    # Set CollectionDatetime
     $instance.CollectionDatetime = [Management.ManagementDateTimeConverter]::ToDmtfDateTime($(Get-Date))
-    $instance.Output = $jsonOutput
+
+    # Set properties dynamically
+    foreach ($key in $Properties.Keys) {
+        if ($instance.PSObject.Properties.Name -contains $key) {
+            $instance.$key = $Properties[$key]
+        } else {
+            Write-Log "WARNING" "Property '$key' is not defined in the WMI class '$wmiClassName'. Skipping."
+        }
+    }
+
     Write-DebugVar instance
 
     try {
@@ -274,9 +294,16 @@ function Add-WmiClassInstance {
     } catch {
         Write-Log "ERROR" "Failed to save class instance. Error: $_"
     }
+}
 
-    # Delete old data
-    $instances = Get-WmiObject -Namespace $WmiNamespace -Class $wmiClassName -ErrorAction Stop
+function Remove-OldInstances {
+    param(
+        [int]$DeleteOlderThanDays,
+        [string]$WmiNamespace,
+        [string]$WmiClassName
+    )
+
+    $instances = Get-WmiObject -Namespace $WmiNamespace -Class $WmiClassName -ErrorAction Stop
 
     # Check if there are more than 10 instances
     if ($instances.Count -gt 5) {
@@ -412,13 +439,6 @@ Write-Log "VERBOSE" "FETCH execution started"
 # Catch and log unexpected execution error messages
 try {
 
-    # If using WMI option, create storage classes if they don't exist
-    if ($Wmi) {
-        $keyProp = @{ "datetime" = "CollectionDatetime" }
-        $props = @{ "string" = "Output" }
-        Add-WmiClass -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType "Data" -KeyProperty $keyProp -Properties $props
-    }
-
     # Confirm this is running on a domain-joined machine
     if (-not (Get-WmiObject Win32_ComputerSystem).PartOfDomain) {
         Write-Log "ERROR" "This system is not joined to Active Directory. Exiting."
@@ -464,8 +484,18 @@ try {
     #>
 
     Write-Log "VERBOSE" "Collecting sessions"
-
     $collectedSessions = @()
+
+    # If using WMI option, create storage class if it doesn't exist
+    if ($Wmi) {
+        $keyProp = @{ "CollectionDatetime" = "datetime" }
+        $props = @{ 
+            "UserSID" = "string"
+            "LastSeen" = "string"
+            "ComputerSID" = "string"
+        }
+        Add-WmiClass -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType "Sessions" -KeyProperty $keyProp -Properties $props
+    }
 
     # Function to add or update a session in $collectedSessions
     function AddOrUpdateSessions([ref]$collectedSessions, $newSession) {
@@ -475,20 +505,31 @@ try {
 
         if ($existingSession) {
 
+            Write-Log "VERBOSE" "Duplicate session found for $($newSession.UserSID)"
             # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
             if ($newSession.LastSeen -gt $existingSession.LastSeen) {
                 $existingSession.LastSeen = $newSession.LastSeen
+                Write-Log "VERBOSE" "Keeping most recent session last seen at $($newSession.LastSeen)"
+            } else {
+                Write-Log "VERBOSE" "Keeping most recent session last seen at $($existingSession.LastSeen)"
             }
             Write-DebugVar existingSession
 
         } else {
+
+            Write-Log "VERBOSE" "New session for $($newSession.UserSID) at $($newSession.LastSeen)"
             # If no session with the same UserSID and ComputerSID is found, add the session to the script output
             $collectedSessions.Value += $newSession
             Write-DebugVar newSession
+
+            if ($Wmi) {
+                Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType 'Sessions' -Properties $newSession
+            }
         }
     }
 
     # Get logged in accounts from HKEY_USERS hive
+    Write-Log "VERBOSE" "Evaluating HKEY_USERS"
     $registryKeys = Get-Item -Path "registry::HKEY_USERS\*"
     Write-DebugVar registryKeys
 
@@ -513,6 +554,7 @@ try {
                 LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f (Get-Date).ToUniversalTime()
             }
             AddOrUpdateSessions ([ref]$collectedSessions) $newSession | Out-Null
+
         } else {
             Write-Log "DEBUG" "Discarding local user with SID: $hkuSID"
         }
@@ -520,6 +562,7 @@ try {
     Write-DebugVar collectedSessions
 
     # Get historic logon data from root\cimv2\sms\SMS_UserLogonEvents
+    Write-Log "VERBOSE" "Evaluating SMS_UserLogonEvents"
     $lookbackPeriodFormatted = [int64]((Get-Date).AddDays(-$SessionLookbackDays) - (Get-Date "1970-01-01 00:00:00")).TotalSeconds
 
     $query = "SELECT * FROM SMS_UserLogonEvents WHERE LogonTime >= '$lookbackPeriodFormatted'"
@@ -543,6 +586,7 @@ try {
                     LastSeen = "{0:yyyy-MM-dd HH:mm} UTC" -f $logonTime
                 }
                 AddOrUpdateSessions ([ref]$collectedSessions) $newSession | Out-Null
+
             } else {
                 Write-Log "DEBUG" "Discarding local user with SID: $hkuSID"
             }
@@ -565,6 +609,18 @@ try {
     #>
 
     Write-Log "VERBOSE" "Collecting user rights assignments"
+    $userRights = @()
+
+    # If using WMI option, create storage class if it doesn't exist
+    if ($Wmi) {
+        $keyProp = @{ "CollectionDatetime" = "datetime" }
+        $props = @{ 
+            "Privilege" = "string"
+            "ObjectIdentifier" = "string"
+            "ObjectType" = "string"
+        }
+        Add-WmiClass -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType "UserRights" -KeyProperty $keyProp -Properties $props
+    }
 
     # Export the security configuration to a file, discarding non-terminating errors to prevent stdout pollution
     secedit /export /areas USER_RIGHTS /cfg "$TempDir\secedit.cfg" > $null 2>&1
@@ -579,9 +635,6 @@ try {
     # Extract and format user rights assignments from the secedit output
     $userRightsLines = $seceditContents -split "`r`n" | Where-Object { $_ -like "SeRemoteInteractiveLogonRight*" }
     Write-DebugVar userRightsLines
-
-    # Initialize output variables
-    $userRights = @()
 
     foreach ($line in $userRightsLines) {
         # Split SIDs from rights assignments
@@ -611,7 +664,6 @@ try {
     }
     Write-DebugVar userRights
 
-
     <#
     -------------------------------------------
     Collect local group memberships
@@ -619,8 +671,20 @@ try {
     #>
 
     Write-Log "VERBOSE" "Collecting local group memberships"
-
     $groups = @()
+
+    # If using WMI option, create storage class if it doesn't exist
+    if ($Wmi) {
+        $keyProp = @{ "CollectionDatetime" = "datetime" }
+        $props = @{ 
+            "GroupName" = "string"
+            "GroupSID" = "string"
+            "MemberType" = "string"
+            "MemberSID" = "string"
+        }
+        Add-WmiClass -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType "LocalGroups" -KeyProperty $keyProp -Properties $props
+    }
+
     $currentGroup = $null
 
     # Exclude domain controllers from local group collection
@@ -840,11 +904,6 @@ try {
     # Use stdout if specified
     if ($StdOut) {
         $jsonOutput
-    }
-
-    # Write to WMI class instance
-    if ($Wmi) {
-        Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType "Data"
 
     } else {
 
@@ -863,9 +922,8 @@ try {
             $WriteTo = Join-Path -Path $todaysDirectory -ChildPath "$($thisComputerDomainSID)_$((Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')).json"
             Write-DebugVar WriteTo
         }
-        $jsonOutput | Out-File $outputFile
+        $jsonOutput | Out-File $WriteTo
     }
-
 } catch {
     Write-Log "ERROR" "FETCH encountered an error at line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
 
