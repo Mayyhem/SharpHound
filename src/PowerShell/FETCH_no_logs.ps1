@@ -13,35 +13,52 @@ Requirements:
   - PowerShell 2.0 or higher
   - .NET Framework 3.5 or higher
 
-.PARAMETER DebugMode
-Use this switch to enable debug mode.
+.PARAMETER Debug
+Enable debugging of script execution events (default: disabled).
 
-.PARAMETER LogFile
-Specify a file path to store logs. Default is 'C:\Windows\CCM\ScriptStore\FetchExecution.log'.
+.PARAMETER DeleteOlderThanDays
+Delete files and/or class instances older than the specified number of days (default: 7 days).
 
-.PARAMETER NoWmiOutput
-Do not store results in the local WMI repository.
+.PARAMETER LogDir
+Store script execution and trace logs in the specified directory. Specify 'off' to disable. (default: $OutputDir if set, otherwise current working directory)
 
-.PARAMETER OutputFile
-Specify a file path to store results.
+.PARAMETER OutputDir
+Store results in the specified directory (default: disabled).
+
+.PARAMETER SessionLookbackDays
+Number of days to look back for sessions (default: 7 days).
 
 .PARAMETER StdOut
-Write results to the console.
+Write BloodHound data to the console (default: disabled).
+
+.PARAMETER TempDir
+Specifies the path for temporary files created to enumerate user rights (default: $OutputDir if set, otherwise current working directory).
+
+.PARAMETER Trace
+Enables trace logging for detailed debugging. This will significantly slow down execution (default: disabled).
+
+.PARAMETER Verbose
+Enable verbose logging of script execution events (default: disabled).
+
+.PARAMETER Wmi
+Store results in the local WMI repository (default: disabled)
+
+.PARAMETER WmiClassPrefix
+Store results in local WMI classes named with the specified prefix (e.g., a value of 'BloodHound_' creates the 'BloodHound_Sessions', 'BloodHound_LocalGroups', and 'BloodHound_UserRights' classes) (default: 'BloodHound_').
+
+.PARAMETER WmiNamespace
+Store results in local WMI classes in the specified namespace (default: 'root\cimv2').
+
+## Deprecate
+
+.PARAMETER DebugMode
+Use this switch to enable debug mode.
 
 .PARAMETER OutputToShare
 Specifies a UNC path to output data. Leave empty to output to a local file or stdout.
 
-.PARAMETER SessionLookbackDays
-Number of days to look back for sessions. Default is 7.
-
 .PARAMETER TempDir
 Specifies the path for temporary files created to enumerate user rights. Default is $env:TEMP.
-
-.PARAMETER Trace
-Enables trace logging for detailed debugging. This will significantly slow down execution.
-
-.PARAMETER Verbose
-Enable verbose logging of script execution events.
 
 .PARAMETER WriteTo
 Specifies the output file path for results or 'stdout' to write to the console.
@@ -66,20 +83,71 @@ https://github.com/BloodHoundAD/SharpHound
 [CmdletBinding()]
 param(
 
-    [switch]$DebugMode,
-
     [switch]$Help,
 
-    # Validate that the log file path exists or is set to "none"
+    # Delete data older than the specified number of days when the script is run
+    [ValidateRange(1,365)]
+    [int]$DeleteOlderThanDays = 7,
+
+    # Validate that the log directory exists
     [ValidateScript({
-        if ([string]::IsNullOrEmpty($_) -or $_ -eq "none" -or (Test-Path (Split-Path -Path $_))) {
+        if ([string]::IsNullOrEmpty($_) -or $_ -eq "off" -or (Test-Path $_)) {
             $true
         } else {
-            throw "The specified directory does not exist: $(Split-Path -Path $_)"
+            throw "The specified directory does not exist: $_"
         }
     })]
-    [string]$LogFile = "C:\Windows\CCM\ScriptStore\FetchExecution.log",
+    [string]$LogDir = $null,
 
+    # Validate that the output directory exists
+    [ValidateScript({
+        if ([string]::IsNullOrEmpty($_) -or (Test-Path $_)) {
+            $true
+        } else {
+            throw "The specified directory does not exist: $_"
+        }
+    })]
+    [string]$OutputDir = $null,
+
+    # Number of days behind to fetch sessions
+    [ValidateRange(1,365)]
+    [int]$SessionLookbackDays = 7,
+
+    # Display BloodHound data in console after collection
+    [switch]$StdOut,
+
+    # Write temporary files to a specific directory instead of $OutputDir or cwd
+    [ValidateScript({
+        if ([string]::IsNullOrEmpty($_) -or (Test-Path $_)) {
+            $true
+        } else {
+            throw "The specified directory does not exist: $_"
+        }
+    })]
+    [string]$TempDir = $null,
+
+    # Enable trace logging for debugging (WARNING: This may take a long time)
+    [switch]$Trace,
+
+    # Enable storage of results in the local WMI repository
+    [switch]$Wmi, 
+
+    # Specify a prefix for naming WMI classes where results are stored 
+    [string]$WmiClassPrefix = "BloodHound_",
+
+    # Validate the specified WMI namespace
+    [ValidateScript({
+        $prefix = $_.Replace('\','/')
+        $parts = $prefix -split '/'
+
+        if ($parts.Count -lt 2) {
+            throw "The WMI namespace format is 'root\cimv2'."
+        }
+        $true
+    })]
+    [string]$WmiNamespace = "root\cimv2",  
+
+    # DEPRECATE
     # Validate that the output directory path is a UNC path if used, ignored if WriteTo is stdout
     [ValidateScript({
         if ([string]::IsNullOrEmpty($_)) {
@@ -97,23 +165,6 @@ param(
     })]
     [string]$OutputToShare = $null,
 
-    # Number of days behind to fetch sessions
-    [ValidateRange(1,365)]
-    [int]$SessionLookbackDays = 7,
-
-    # Write temporary files to a specific directory instead of %TEMP%
-    [ValidateScript({
-        if ([string]::IsNullOrEmpty($_) -or $_ -eq "none" -or (Test-Path $_)) {
-            $true
-        } else {
-            throw "The specified directory does not exist: $_"
-        }
-    })]
-    [string]$TempDir = $env:TEMP,
-
-    # Enable trace logging for debugging (WARNING: This may take a long time)
-    [switch]$Trace,
-
     # Validate that the output file path exists or is set to "stdout", path ignored if OutputToShare provided
     [ValidateScript({
         if ($_ -eq "stdout" -or ((Test-Path (Split-Path -Path $_)) -and $_ -match '\.json$')) {
@@ -127,93 +178,256 @@ param(
     [string]$WriteTo = "C:\Windows\CCM\ScriptStore\FetchResults.json"
 )
 
+
+<#
+-------------------------------------------
+Helper functions
+-------------------------------------------
+#>
+
+function Add-WmiClass {
+    param(
+        [string]$WmiNamespace,
+        [string]$WmiClassPrefix,
+        [string]$CollectionType,
+        [hashtable]$KeyProperty,
+        [hashtable]$Properties)
+
+    # Example: BloodHound_Sessions
+    $wmiClassName = "$WmiClassPrefix$CollectionType"
+    $query = "SELECT * FROM meta_class WHERE __class = '$wmiClassName'"
+    $result = Get-WmiObject -Namespace $WmiNamespace -Query $query -ErrorAction Stop
+
+    # Create a class to store output if it doesn't exist
+    if ($null -eq $result) {
+
+        Write-Log "VERBOSE" "$WmiNamespace\$wmiClassName does not exist, creating it now"
+
+        # Add key property
+        foreach ($key in $KeyProperty.Keys) {
+            $propertiesFormatted += "[key] $key $($KeyProperty[$key]);`n"
+        }
+        
+        # Add other properties
+        $Properties.GetEnumerator() | ForEach-Object {
+            $propertiesFormatted += "$($_.Key) $($_.Value);"
+        }
+
+        $wmiNamespaceFormatted = $WmiNamespace.Replace('\','\\')
+        $mofContent = @"
+#pragma namespace ("\\\\.\\$wmiNamespaceFormatted")
+[ SMS_Report (TRUE),
+SMS_Group_Name ("BloodHound $CollectionType"),
+SMS_Class_ID ("SpecterOps|BloodHound $CollectionType|1.0")]
+class $wmiClassName
+{
+$($propertiesFormatted.TrimEnd("`n"))
+};
+"@
+
+        # Save the MOF content to a temporary file
+        do {
+            $randomPart = [System.IO.Path]::GetRandomFileName().Split('.')[0]
+            $tempFilePath = Join-Path -Path $TempDir -ChildPath "temp-$randomPart"
+        } while (Test-Path -Path $tempFilePath)
+
+        Set-Content -Path $tempFilePath -Value $mofContent
+
+        # Compile the MOF file
+        $mofcomp = $env:SystemRoot + "\system32\wbem\mofcomp.exe"
+        $result = & $mofcomp $tempFilePath 2>&1
+
+        # Check if compilation was successful
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "ERROR" "Failed to deploy WMI class: $result"
+        } else {
+            Write-Log "VERBOSE" "Successfully created $WmiNamespace\$wmiClassName"
+        }
+
+        # Clean up the temporary file
+        Remove-Item -Path $tempFilePath -Force
+
+    } else {
+        Write-Log "VERBOSE" "$WmiNamespace\$wmiClassName already exists, skipping"
+    }
+}
+
+function Add-WmiClassInstance {
+    param(
+        [string]$WmiNamespace,
+        [string]$WmiClassPrefix,
+        [string]$CollectionType
+    )
+
+    # Output to WMI class
+    $wmiClassName = "$WmiClassPrefix$CollectionType"
+
+    # Create new class instance
+    $instance = ([WMICLASS]"\\.\${WmiNamespace}:${wmiClassName}").CreateInstance()
+    $instance.CollectionDatetime = [Management.ManagementDateTimeConverter]::ToDmtfDateTime($(Get-Date))
+    $instance.Output = $jsonOutput
+    Write-DebugVar instance
+
+    try {
+        $instance.Put() | Out-Null
+        Write-Log "VERBOSE" "Successfully saved collection data to ${WmiNamespace}\${wmiClassName}"
+    } catch {
+        Write-Log "ERROR" "Failed to save class instance. Error: $_"
+    }
+
+    # Delete old data
+    $instances = Get-WmiObject -Namespace $WmiNamespace -Class $wmiClassName -ErrorAction Stop
+
+    # Check if there are more than 10 instances
+    if ($instances.Count -gt 5) {
+        Write-Log "VERBOSE" "Found $($instances.Count) instances. Keeping the 5 most recent."
+
+        # Sort instances by CollectionDatetime property in descending order and skip the first 10
+        $instancesToDelete = $instances | Sort-Object -Property CollectionDatetime -Descending | Select-Object -Skip 10
+
+        # Delete older instances
+        foreach ($instance in $instancesToDelete) {
+            try {
+                $instance.Delete()
+                Write-Log "VERBOSE" "Deleted instance with CollectionDatetime: $($instance.CollectionDatetime)"
+            }
+            catch {
+                Write-Log "WARNING" "Failed to delete instance with CollectionDatetime: $($instance.CollectionDatetime). Error: $_"
+            }
+        }
+
+        Write-Log "VERBOSE" "Cleanup complete. Remaining instances: $((Get-WmiObject -Namespace $WmiNamespace -Class $wmiClassName).Count)"
+    }
+    else {
+        Write-Log "VERBOSE" "Found no instances. No cleanup needed."
+    }
+}
+
+function Write-DebugVar {
+    param([string]$VariableName)
+    Write-Log "DEBUG" "Line $($MyInvocation.ScriptLineNumber): `$${VariableName} = $(Get-Variable -Name $VariableName -ValueOnly | Out-String)"
+}
+
+function Write-Log {
+    param(
+        [string]$Level,
+        [string]$Message
+    )
+    $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
+    $logEntry = "$timestamp UTC - $Message"
+    
+    switch ($Level) {
+        "DEBUG" { 
+            if ($Script:DebugPreference -eq 'Continue') { 
+                Write-Debug $logEntry 
+                if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+            } 
+        }
+        "VERBOSE" { 
+            if ($Script:VerbosePreference -eq 'Continue') { 
+                Write-Verbose $logEntry
+                if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+            }
+        }
+        "WARNING" { 
+            Write-Warning $logEntry 
+            if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+        }
+        "ERROR" { 
+            Write-Error $logEntry 
+            if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+        }
+        default {
+            Write-Host $logEntry
+            if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+        }
+    }
+}
+
+
+<#
+-------------------------------------------
+Setup
+-------------------------------------------
+#>
+
 # Display help text
 if ($Help) {
     Get-Help $MyInvocation.MyCommand.Path
     exit
 }
 
-# Initialize logging
-function Write-Log {
-    param([string]$Message)
-    if ($LogFile -and $LogFile -ne "none") {
-        # Construct the log message with the current UTC time and write to specified file
-        $logEntry = "$((Get-Date).ToUniversalTime()) UTC - $Message"
-        $logEntry | Out-File -FilePath $LogFile -Append
+# Log to the specified directory, $OutputDir, current working directory, or off
+if ($LogDir -ne "off") {
+    if ([string]::IsNullOrEmpty($LogDir)) {
+        if (-not [string]::IsNullOrEmpty($OutputDir)) {
+            $LogDir = $OutputDir
+        } else {
+            $LogDir = (Get-Location).Path
+        }
     }
+    $logFile = "$LogDir\FetchExecution.log"
+    Write-Log "VERBOSE" "Writing logs to $logFile"
+}
+
+# Write temp files to the specified directory, $OutputDir, or cwd
+if ([string]::IsNullOrEmpty($TempDir)) {
+    if (-not [string]::IsNullOrEmpty($OutputDir)) {
+        $TempDir = $OutputDir
+    } else {
+        $TempDir = (Get-Location).Path
+    }
+    Write-Log "VERBOSE" "Writing temp files to $TempDir\"
+}
+
+# Initialize logging
+if ($DebugPreference -eq 'Inquire') {
+    $Script:DebugPreference = "Continue"
+    $Script:VerbosePreference = "Continue"
 }
 
 # Trace logging - display lines as they are executed and store transcript
 if ($Trace) {
+    $tracePath = "$LogDir\FetchTrace_$((Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss"))-UTC.log"
+    Write-Log "VERBOSE" "Writing trace to $tracePath"
     Set-PSDebug -Trace 1
-    Start-Transcript -Path "FetchTrace_$((Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss"))-UTC.log"
-    $DebugMode = $true
+    Start-Transcript -Path $tracePath
 }
 
-# Debug logging - display variable values
-if ($DebugMode) {
-    #$originalDebugPreference = $DebugPreference
-    $Script:DebugPreference = 'Continue'
-    #$VerbosePreference = 'Continue'
+if ($OutputDir) { 
+    $outputFile = "$OutputDir\FetchResults.json" 
+    Write-Log "VERBOSE" "Writing results to $outputFile"
 }
 
-function Write-DebugInfo {
-    param([string]$Message)
-    Write-Debug "$((Get-Date).ToUniversalTime()) UTC, Line $($MyInvocation.ScriptLineNumber): $Message"
-}
 
-function Write-DebugVar {
-    param([string]$VariableName)
-    Write-Debug "$((Get-Date).ToUniversalTime()) UTC, Line $($MyInvocation.ScriptLineNumber): `$${VariableName} = $(Get-Variable -Name $VariableName -ValueOnly | Out-String)"
-}
 
-function Write-ErrorInfo {
-    param([string]$Message)
-    # Capture in transcript if in debug/trace mode
-    if ($DebugMode) {
-        Write-DebugInfo $Message
-    } else {
-        Write-Error "$((Get-Date).ToUniversalTime()) UTC, Line $($MyInvocation.ScriptLineNumber): $Message"
-        Write-Log $Message
-    }
-}
+<#
+-------------------------------------------
+Main
+-------------------------------------------
+#>
 
-function Write-VerboseInfo {
-    param([string]$Message)
-    # Capture in transcript if in debug/trace mode
-    if ($DebugMode) {
-        Write-DebugInfo $Message
-    } else {
-        Write-Verbose "$((Get-Date).ToUniversalTime()) UTC, Line $($MyInvocation.ScriptLineNumber): $Message"
-        Write-Log $Message
-    }
-}
-
-function Write-WarningInfo {
-    param([string]$Message)
-    # Capture in transcript if in debug/trace mode
-    if ($DebugMode) {
-        Write-DebugInfo $Message
-    } else {
-        Write-Warning "$((Get-Date).ToUniversalTime()) UTC, Line $($MyInvocation.ScriptLineNumber): $Message"
-        Write-Log $Message
-    }
-}
-
-Write-VerboseInfo "FETCH execution started"
+Write-Log "VERBOSE" "FETCH execution started"
 
 # Catch and log unexpected execution error messages
 try {
 
+    # If using WMI option, create storage classes if they don't exist
+    if ($Wmi) {
+        $keyProp = @{ "datetime" = "CollectionDatetime" }
+        $props = @{ "string" = "Output" }
+        Add-WmiClass -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType "Data" -KeyProperty $keyProp -Properties $props
+    }
+
     # Confirm this is running on a domain-joined machine
     if (-not (Get-WmiObject Win32_ComputerSystem).PartOfDomain) {
-        Write-ErrorInfo "This system is not joined to Active Directory. Exiting."
+        Write-Log "ERROR" "This system is not joined to Active Directory. Exiting."
         exit 1
     }
 
     # Confirm this is running in a high integrity context
     if (-not (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-ErrorInfo "[!] This script must be executed with administrator privileges. Exiting."
+        Write-Log "ERROR" "This script must be executed with administrator privileges. Exiting."
         exit 1
     }
 
@@ -231,7 +445,7 @@ try {
         $thisComputerDomainSID = $thisComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
         Write-DebugVar thisComputerDomainSID
     } catch {
-        Write-DebugInfo "Could not translate the domain account to a SID: $sourceComputerDomainAccount"
+        Write-Log "VERBOSE" "Could not translate the domain account to a SID: $sourceComputerDomainAccount"
     }
 
     # Collect local system FQDN
@@ -248,6 +462,8 @@ try {
     Collect sessions
     -------------------------------------------
     #>
+
+    Write-Log "VERBOSE" "Collecting sessions"
 
     $collectedSessions = @()
 
@@ -298,7 +514,7 @@ try {
             }
             AddOrUpdateSessions ([ref]$collectedSessions) $newSession | Out-Null
         } else {
-            Write-DebugInfo "Discarding local user with SID: $hkuSID"
+            Write-Log "DEBUG" "Discarding local user with SID: $hkuSID"
         }
     }
     Write-DebugVar collectedSessions
@@ -328,11 +544,11 @@ try {
                 }
                 AddOrUpdateSessions ([ref]$collectedSessions) $newSession | Out-Null
             } else {
-                Write-DebugInfo "Discarding local user with SID: $hkuSID"
+                Write-Log "DEBUG" "Discarding local user with SID: $hkuSID"
             }
         }
     } else {
-        Write-DebugInfo "No logon events found in the lookback period."
+        Write-Log "VERBOSE" "No logon events found in the lookback period."
     }
 
     $sessions = @{
@@ -347,6 +563,8 @@ try {
     Collect local user rights assignments
     -------------------------------------------
     #>
+
+    Write-Log "VERBOSE" "Collecting user rights assignments"
 
     # Export the security configuration to a file, discarding non-terminating errors to prevent stdout pollution
     secedit /export /areas USER_RIGHTS /cfg "$TempDir\secedit.cfg" > $null 2>&1
@@ -399,6 +617,8 @@ try {
     Collect local group memberships
     -------------------------------------------
     #>
+
+    Write-Log "VERBOSE" "Collecting local group memberships"
 
     $groups = @()
     $currentGroup = $null
@@ -484,8 +704,9 @@ try {
                                     "ObjectType" = $memberType
                                 }
 
+                            # Skip other built-in SIDs (e.g., IUSR, INTERACTIVE)
                             } else {
-                                Write-DebugInfo "Not collecting members of $memberName ($memberSID)"
+                                Write-Log "VERBOSE" "Not collecting members of $memberName ($memberSID)"
                             }
 
                         # This computer
@@ -539,7 +760,7 @@ try {
             $groups += $currentGroup
         }
     } else {
-        Write-DebugInfo "This system is a domain controller, skipping local group membership enumeration"
+        Write-Log "VERBOSE" "This system is a domain controller, skipping local group membership enumeration"
     }
     Write-DebugVar groups
 
@@ -617,92 +838,15 @@ try {
     Write-DebugVar jsonOutput
 
     # Use stdout if specified
-    if ($WriteTo -eq "stdout") {
+    if ($StdOut) {
         $jsonOutput
+    }
+
+    # Write to WMI class instance
+    if ($Wmi) {
+        Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType "Data"
 
     } else {
-
-        # Output to WMI class
-        $wmiClassName = "SMS_BloodHoundData"
-        $wmiClassNamespace = "root\CCM"
-        $outputWmiClass = Get-WmiObject -Class $wmiClassName -Namespace $wmiClassNamespace -List -ErrorAction Stop
-
-        # Create a class to store output if it doesn't exist
-        if ($null -eq $outputWmiClass) {
-
-            Write-DebugInfo "$wmiClassName does not exist, creating it now"
-
-            # MaxLen set to unsigned 32-bit integer maximum
-            $mofContent = @"
-#pragma namespace ("\\\\.\\root\\CCM")
-
-[ SMS_Report (TRUE),
-SMS_Group_Name ("BloodHound Data"),
-SMS_Class_ID ("SpecterOps|BloodHound Data|1.0")]
-class SMS_BloodHoundData
-{
-    [key] 
-    datetime CollectionDatetime;
-
-    [MaxLen(4294967295)]
-    string Output;
-};
-"@
-            # Save the MOF content to a temporary file
-            do {
-                $randomPart = [System.IO.Path]::GetRandomFileName().Split('.')[0]
-                $tempFilePath = Join-Path -Path $TempDir -ChildPath "temp-$randomPart.$Extension"
-            } while (Test-Path -Path $tempFilePath)
-
-            Set-Content -Path $tempFilePath -Value $mofContent
-
-            # Compile the MOF file
-            $mofcomp = $env:SystemRoot + "\system32\wbem\mofcomp.exe"
-            $result = & $mofcomp $tempFilePath 2>&1
-
-            # Check if compilation was successful
-            if ($LASTEXITCODE -ne 0) {
-                Write-ErrorInfo "Failed to deploy WMI class. Error: $result"
-            } else {
-                Write-DebugInfo "Successfully created $wmiClassNamespace\\$wmiClassName"
-            }
-
-            # Clean up the temporary file
-            Remove-Item -Path $tempFilePath -Force
-        }
-
-        # Create new class instance
-        $instance = ([WMICLASS]"\\.\${wmiClassNamespace}:${wmiClassName}").CreateInstance()
-        $instance.CollectionDatetime = [Management.ManagementDateTimeConverter]::ToDmtfDateTime($(Get-Date))
-        $instance.Output = $jsonOutput
-        $instance.Put()
-
-        # Delete old data
-        $instances = Get-WmiObject -Namespace $wmiClassNamespace -Class $wmiClassName -ErrorAction Stop
-
-        # Check if there are more than 10 instances
-        if ($instances.Count -gt 5) {
-            Write-DebugInfo "Found $($instances.Count) instances. Keeping the 5 most recent."
-
-            # Sort instances by CollectionDatetime property in descending order and skip the first 10
-            $instancesToDelete = $instances | Sort-Object -Property CollectionDatetime -Descending | Select-Object -Skip 10
-
-            # Delete older instances
-            foreach ($instance in $instancesToDelete) {
-                try {
-                    $instance.Delete()
-                    Write-VerboseInfo "Deleted instance with CollectionDatetime: $($instance.CollectionDatetime)"
-                }
-                catch {
-                    Write-WarningInfo "Failed to delete instance with CollectionDatetime: $($instance.CollectionDatetime). Error: $_"
-                }
-            }
-
-            Write-VerboseInfo "Cleanup complete. Remaining instances: $((Get-WmiObject -Namespace $wmiClassNamespace -Class $wmiClassName).Count)"
-        }
-        else {
-            Write-VerboseInfo "Found no instances. No cleanup needed."
-        }
 
         # Use output directory for SMB collection if specified
         if ($OutputToShare) {
@@ -713,27 +857,21 @@ class SMS_BloodHoundData
             if (-not (Test-Path $todaysDirectory)) {
                 New-Item -Path $todaysDirectory -ItemType Directory
             } else {
-                Write-DebugInfo "$todaysDirectory already exists"
+                Write-Log "DEBUG" "$todaysDirectory already exists"
             }
             # Use the computer's domain SID in output files written to network shares
             $WriteTo = Join-Path -Path $todaysDirectory -ChildPath "$($thisComputerDomainSID)_$((Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')).json"
             Write-DebugVar WriteTo
         }
-        $jsonOutput | Out-File $WriteTo
+        $jsonOutput | Out-File $outputFile
     }
 
 } catch {
-    Write-ErrorInfo "FETCH encountered an error at line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
-    Write-Log "FETCH encountered an error at line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
+    Write-Log "ERROR" "FETCH encountered an error at line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
 
 } finally {
     # End logging
-    Write-VerboseInfo "FETCH execution completed"
-
-    # Restore debug logging preference
-    #if ($DebugMode) {
-    #    $DebugPreference = $originalDebugPreference
-    #}
+    Write-Log "VERBOSE" "FETCH execution completed"
 
     # Disable trace logging
     if ($Trace) {
