@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reflection;
@@ -39,7 +40,7 @@ namespace Sharphound
             var httpHandler = new HttpClientHandler();
 
             // Proxy settings
-            //var trustAllCerts = new TrustAllCertsPolicy();
+            //var trustAllCerts = new Fetch.TrustAllCertsPolicy();
             //ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
             //httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
 
@@ -239,6 +240,7 @@ namespace Sharphound
         {
             Console.WriteLine("[*] Checking if SharpHound client " + sharpHoundClientName + " exists");
             JObject getClientsResponse = await adminClient.GetClientsAsync();
+
             JArray clients = (JArray)getClientsResponse["data"];
 
             foreach (JObject client in clients)
@@ -250,6 +252,7 @@ namespace Sharphound
                 }
             }
             Console.WriteLine("[*] SharpHound client named " + sharpHoundClientName + " not found");
+
             return null;
         }
 

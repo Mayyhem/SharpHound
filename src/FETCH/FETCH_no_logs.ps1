@@ -280,11 +280,7 @@ function Add-WmiClassInstance {
     # Set properties dynamically
     foreach ($key in $Properties.Keys) {
         if ($instance.PSObject.Properties.Name -contains $key) {
-            $instance.$key = if ($Properties[$key] -match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$') {
-                ([DateTime]::ParseExact($Properties[$key], "yyyy-MM-dd HH:mm 'UTC'", [System.Globalization.CultureInfo]::InvariantCulture)).ToString("yyyyMMddHHmmss.ffffff+000")
-            } else {
-                $Properties[$key]
-            }
+            $instance.$key = $Properties[$key]
         } else {
             Write-Log "WARNING" "Property '$key' is not defined in the WMI class '$wmiClassName'. Skipping."
         }
@@ -326,7 +322,7 @@ function Remove-OldInstances {
         Write-Log "VERBOSE" "Cleanup complete. Remaining instances: $((Get-WmiObject -Namespace $WmiNamespace -Class $wmiClassName).Count)"
     }
     else {
-        Write-Log "VERBOSE" "Found no instances older than $DeleteOlderThanDays days in $WmiClassName. No cleanup needed."
+        Write-Log "VERBOSE" "Found no instances older than $DeleteOlderThanDays days. No cleanup needed."
     }
 }
 
@@ -491,7 +487,7 @@ try {
         $keyProp = @{ "CollectionDatetime" = "datetime" }
         $props = @{ 
             "UserSID" = "string"
-            "LastSeen" = "datetime"
+            "LastSeen" = "string"
             "ComputerSID" = "string"
         }
         Add-WmiClass -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType "Sessions" -KeyProperty $keyProp -Properties $props
@@ -851,7 +847,7 @@ try {
                         Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType 'LocalGroups' -Properties $localGroupMember
                     }
                 } else {
-                    Write-Log "VERBOSE" "Skipping $memberType $memberSID in $($currentGroup.Name) ($($currentGroup.ObjectIdentifier))"
+                    Write-Log "WARNING" "Skipping $memberType $memberSID in $($currentGroup.Name) ($($currentGroup.ObjectIdentifier))"
                 }
             }
             # Add each local group to script output

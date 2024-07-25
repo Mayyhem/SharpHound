@@ -1,5 +1,6 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using SharpHoundRPC;
 using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
@@ -352,31 +353,58 @@ namespace Sharphound
             return null;
         }
 
-        public static async Task<List<JObject>> QuerySiteDatabase(string siteDatabaseFqdn, string siteCode)
+        public static async Task<List<SiteDatabaseQueryResult>> QuerySiteDatabase(string siteDatabaseFqdn, string siteCode, string tablePrefix, string collectionType, int lookbackDays)
         {
+            List<SiteDatabaseQueryResult> results = new List<SiteDatabaseQueryResult>();
+
             string connectionString = $"Server={siteDatabaseFqdn};Database=CM_{siteCode};Integrated Security=True;";
 
-            // Get most recent collection for each MachineID
-            string query = @"
-            WITH LatestCollections AS (
+            List<string> rowNames = new List<string>();
+            if (collectionType == "Sessions")
+            {
+                rowNames.Add("UserSID00");
+                rowNames.Add("LastSeen00");
+                rowNames.Add("ComputerSID00");
+            }
+            else if (collectionType == "UserRights")
+            {
+                rowNames.Add("Privilege00");
+                rowNames.Add("ObjectIdentifier00");
+                rowNames.Add("ObjectType00");
+            }
+            else if (collectionType == "LocalGroups")
+            {
+                rowNames.Add("GroupName00");
+                rowNames.Add("GroupSID00");
+                rowNames.Add("MemberType00");
+                rowNames.Add("MemberSID00");
+            }
+            else
+            {
+                Console.WriteLine("[!] Invalid collection type");
+                return null;
+            }
+
+            // Get collection data organized by machine where data originated, filter to lookback period 
+            string query = @$"
+                WITH FilteredCollections AS (
+                    SELECT 
+                        MachineID,
+                        CollectionDatetime00,
+                        {string.Join(",\r\n", rowNames)}
+                    FROM {tablePrefix}{collectionType}_DATA
+                    WHERE CollectionDatetime00 >= DATEADD(day, -{lookbackDays}, GETDATE())
+                )
                 SELECT 
-                    MachineID,
-                    CollectionDatetime00,
-                    Output00,
-                    ROW_NUMBER() OVER (PARTITION BY MachineID ORDER BY CollectionDatetime00 DESC) as RowNum
-                FROM SpecterOps_BloodHound_Data_DATA
-            )
-            SELECT 
-                LC.MachineID,
-                LC.CollectionDatetime00,
-                LC.Output00,
-                SD.SID0,
-                SD.Netbios_Name0,
-                SD.Full_Domain_Name0
-            FROM LatestCollections LC
-            LEFT JOIN System_DISC SD ON LC.MachineID = SD.ItemKey
-            WHERE LC.RowNum = 1
-            ORDER BY LC.CollectionDatetime00 DESC";
+                    FC.MachineID,
+                    FC.CollectionDatetime00,
+                    {string.Join(",\r\n", rowNames.Select(r => $"FC.{r}"))},
+                    SD.SID0,
+                    SD.Netbios_Name0,
+                    SD.Full_Domain_Name0
+                FROM FilteredCollections FC
+                LEFT JOIN System_DISC SD ON FC.MachineID = SD.ItemKey
+                ORDER BY FC.CollectionDatetime00 DESC";
 
             using (SqlConnection connection = new SqlConnection(connectionString))
             {
@@ -388,30 +416,24 @@ namespace Sharphound
                     {
                         using (SqlDataReader reader = await command.ExecuteReaderAsync())
                         {
-                            var results = new List<JObject>();
-
                             while (await reader.ReadAsync())
                             {
-                                string computerSid = reader.GetString(3);
-                                string computerFqdn = reader.GetString(4) + "." + reader.GetString(5);
+                                var result = new SiteDatabaseQueryResult
+                                {
+                                    CollectedComputerMachineID = reader["MachineID"].ToString(),
+                                    CollectionDatetime = Convert.ToDateTime(reader["CollectionDatetime00"]),
+                                    CollectionData = new Dictionary<string, string>(),
+                                    CollectedComputerSID = reader["SID0"].ToString(),
+                                    CollectedComputerNetbiosName = reader["Netbios_Name0"].ToString(),
+                                    CollectedComputerFullDomainName = reader["Full_Domain_Name0"].ToString()
+                                };
 
-                                // Get Output00 for this machine and add to the list of objects to ingest
-                                string output = reader.GetString(2);
+                                foreach (string rowName in rowNames)
+                                {
+                                    result.CollectionData[rowName] = reader[rowName].ToString();
+                                }
 
-                                // Remove escaping for double quotes (e.g., \")
-                                var jsonBody = output.Replace("\\\"", "\"");
-                                var jsonObject = JsonConvert.DeserializeObject<JObject>(jsonBody);
-                                results.Add(jsonObject);
-                            }
-
-                            if (results.Count > 0)
-                            {
-                                Console.WriteLine($"Fetched {results.Count} records.");
-                                return results;
-                            }
-                            else
-                            {
-                                Console.WriteLine("No data found in the table.");
+                                results.Add(result);
                             }
                         }
                     }
@@ -425,8 +447,169 @@ namespace Sharphound
                     Console.WriteLine($"Error: {ex.Message}");
                 }
             }
-            return null;
+            return results;
         }
+
+    public static JObject FormatQueryResults(List<SiteDatabaseQueryResult> results)
+    {
+        // Group results by ComputerSID to process each computer's data together
+        var groupedResults = results.GroupBy(r => r.CollectedComputerSID);
+
+        var formattedResults = new JObject
+        {
+            ["meta"] = new JObject
+            {
+                ["count"] = groupedResults.Count(),
+                ["type"] = "computers",
+                ["version"] = 5,
+                ["methods"] = 107028
+            },
+            ["data"] = new JArray(groupedResults.Select(group => FormatComputerData(group.Key, group)))
+        };
+
+        return formattedResults;
+    }
+
+    private static JObject FormatComputerData(string objectIdentifier, IEnumerable<SiteDatabaseQueryResult> computerResults)
+    {
+        var firstResult = computerResults.First();
+        var computerData = new JObject
+        {
+            ["ObjectIdentifier"] = objectIdentifier,
+            ["Properties"] = new JObject
+            {
+                ["name"] = firstResult.CollectedComputerNetbiosName
+            }
+        };
+
+        // Dictionary to store the most recent session for each unique UserSID and ComputerSID combination
+        // Key: (UserSID, ComputerSID), Value: (LastSeen as DateTime, LastSeen as string)
+        var sessionDict = new Dictionary<(string, string), (DateTime, string)>();
+
+        // Dictionary to store unique UserRights
+        // Key: Privilege, Value: Set of (ObjectIdentifier, ObjectType) tuples
+        var userRights = new Dictionary<string, HashSet<(string, string)>>();
+
+        // Dictionary to store LocalGroups
+        // Key: GroupSID, Value: JObject representing the group
+        var localGroups = new Dictionary<string, JObject>();
+
+        foreach (var result in computerResults)
+        {
+            if (result.CollectionData.ContainsKey("UserSID00"))
+            {
+                // Process Session data
+                var userSID = result.CollectionData["UserSID00"];
+                var computerSID = result.CollectionData["ComputerSID00"];
+                var lastSeenString = result.CollectionData["LastSeen00"];
+
+
+                // Parse the LastSeen string to DateTime for accurate comparison
+                var lastSeen = new DateTime();
+                DateTime.TryParseExact(lastSeenString, "M/d/yyyy h:mm:ss tt",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out lastSeen);
+
+                // Format the LastSeen back to the desired output format
+                var formattedLastSeen = lastSeen.ToString("yyyy-MM-dd HH:mm UTC");
+
+                var key = (userSID, computerSID);
+
+                // Update the dictionary if this is a new or more recent session
+                if (!sessionDict.ContainsKey(key) || lastSeen > sessionDict[key].Item1)
+                {
+                    sessionDict[key] = (lastSeen, formattedLastSeen);
+                }
+            }
+                else if (result.CollectionData.ContainsKey("Privilege00"))
+            {
+                // Process UserRights data
+                var privilege = result.CollectionData["Privilege00"];
+                var rightObjectIdentifier = result.CollectionData["ObjectIdentifier00"];
+                var objectType = result.CollectionData["ObjectType00"];
+
+                if (!userRights.ContainsKey(privilege))
+                {
+                    userRights[privilege] = new HashSet<(string, string)>();
+                }
+                userRights[privilege].Add((rightObjectIdentifier, objectType));
+            }
+            else if (result.CollectionData.ContainsKey("GroupName00"))
+            {
+                // Process LocalGroups data
+                var groupName = result.CollectionData["GroupName00"];
+                var groupSID = result.CollectionData["GroupSID00"];
+                var memberSID = result.CollectionData["MemberSID00"];
+                var memberType = result.CollectionData["MemberType00"];
+
+                if (!localGroups.ContainsKey(groupSID))
+                {
+                    // Create a new group if it doesn't exist
+                    localGroups[groupSID] = new JObject
+                    {
+                        ["LocalNames"] = new JArray(),
+                        ["Name"] = groupName,
+                        ["Collected"] = true,
+                        ["FailureReason"] = null,
+                        ["Results"] = new JArray(),
+                        ["ObjectIdentifier"] = groupSID
+                    };
+                }
+
+                var results = (JArray)localGroups[groupSID]["Results"];
+                // Add the member to the group if it's not already there
+                if (!results.Any(r => (string)r["ObjectIdentifier"] == memberSID))
+                {
+                    results.Add(new JObject
+                    {
+                        ["ObjectIdentifier"] = memberSID,
+                        ["ObjectType"] = memberType
+                    });
+                }
+            }
+        }
+
+        // Add Sessions to the computer data if any exist
+        if (sessionDict.Count > 0)
+        {
+            computerData["Sessions"] = new JObject
+            {
+                ["Collected"] = true,
+                ["FailureReason"] = null,
+                ["Results"] = new JArray(sessionDict.Select(kvp => new JObject
+                {
+                    ["UserSID"] = kvp.Key.Item1,
+                    ["LastSeen"] = kvp.Value.Item2,
+                    ["ComputerSID"] = kvp.Key.Item2
+                }))
+            };
+        }
+
+        // Add UserRights to the computer data if any exist
+        if (userRights.Count > 0)
+        {
+            computerData["UserRights"] = new JArray(userRights.Select(kvp => new JObject
+            {
+                ["LocalNames"] = new JArray(),
+                ["Collected"] = true,
+                ["FailureReason"] = null,
+                ["Privilege"] = kvp.Key,
+                ["Results"] = new JArray(kvp.Value.Select(v => new JObject
+                {
+                    ["ObjectIdentifier"] = v.Item1,
+                    ["ObjectType"] = v.Item2
+                }))
+            }));
+        }
+
+        // Add LocalGroups to the computer data if any exist
+        if (localGroups.Count > 0)
+        {
+            computerData["LocalGroups"] = new JArray(localGroups.Values);
+        }
+
+        return computerData;
+    }
 
         public class TrustAllCertsPolicy
         {

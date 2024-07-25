@@ -33,6 +33,7 @@ using Sharphound.Client;
 using Sharphound.Runtime;
 using SharpHoundCommonLib;
 using SharpHoundCommonLib.Processors;
+using SharpHoundRPC;
 using Timer = System.Timers.Timer;
 
 namespace Sharphound
@@ -406,7 +407,7 @@ namespace Sharphound
                 });
                 var options = parser.ParseArguments<Options>(args);
 
-                await options.WithParsedAsync(async options =>
+                _ = await options.WithParsedAsync(async options =>
                 {
                     if (!options.ResolveCollectionMethods(logger, out var resolved, out var dconly)) return;
 
@@ -490,88 +491,123 @@ namespace Sharphound
                     //     cancellationTokenSource.Cancel();
                     // };
 
-                    // SMB share collection
-                    string uncPattern = @"^\\\\[\w\d.-]+\\[\w\d.-]+(\\)?";
-                    if (!string.IsNullOrEmpty(options.FetchResultsFile))
+                    // FETCH retrieval, aggregation, and upload to ingest API
+                    if (!string.IsNullOrEmpty(options.Fetch))
                     {
-                        // Use this collection method automatically if --fetchresultsfile is a UNC path
-                        if (Regex.IsMatch(options.FetchResultsFile, uncPattern))
+                        // SMB share collection
+                        if (options.Fetch == "dir")
                         {
-                            List<JObject> fetchResults = await Fetch.GetFetchResultsFromShare(options.FetchResultsFile, options.FetchLookbackDays);
-
-                            if (fetchResults != null)
+                            string uncPattern = @"^\\\\[\w\d.-]+\\[\w\d.-]+(\\)?";
+                            if (!string.IsNullOrEmpty(options.FetchResultsFile))
                             {
-                                await APIClient.SendItAsync(fetchResults);
+                                // Use this collection method automatically if --fetchresultsfile is a UNC path
+                                if (Regex.IsMatch(options.FetchResultsFile, uncPattern))
+                                {
+                                    List<JObject> fetchResults = await Fetch.GetFetchResultsFromShare(options.FetchResultsFile, options.FetchLookbackDays);
+
+                                    if (fetchResults != null)
+                                    {
+                                        await APIClient.SendItAsync(fetchResults);
+                                    }
+                                    else
+                                    {
+                                        logger.LogError($"The remote share ({options.FetchResultsFile}) did not respond with FETCH data");
+                                    }
+                                }
                             }
+                        }
+
+                        else if (options.Fetch == "cmpivot")
+                        {
+                            // SCCM collection with CMPivot
+                            if (!string.IsNullOrEmpty(options.SmsProvider) && !string.IsNullOrEmpty(options.SiteCode) && !string.IsNullOrEmpty(options.SccmCollectionId))
+                            {
+                                JObject cmPivotResponse = await Fetch.QuerySccmAdminService(options.SmsProvider, options.SiteCode, options.SccmCollectionId, options.FetchResultsFile, options.FetchTimeout);
+                                List<JObject> fetchResults = Fetch.PrepareCMPivotQueryResults(cmPivotResponse);
+
+                                if (fetchResults != null)
+                                {
+                                    await APIClient.SendItAsync(fetchResults);
+                                }
+                                else
+                                {
+                                    logger.LogError($"The SMS Provider ({options.SmsProvider}) did not respond with FETCH data");
+                                }
+                            }
+                            else if (!string.IsNullOrEmpty(options.SmsProvider) || !string.IsNullOrEmpty(options.SiteCode) || !string.IsNullOrEmpty(options.SccmCollectionId))
+                            {
+                                if (string.IsNullOrEmpty(options.SmsProvider)) Console.WriteLine("[!] SmsProvider was not specified");
+                                if (string.IsNullOrEmpty(options.SiteCode)) Console.WriteLine("[!] SiteCode was not specified");
+                                if (string.IsNullOrEmpty(options.SccmCollectionId)) Console.WriteLine("[!] SccmCollectionId was not specified");
+                                Console.WriteLine("[!] Skipping SCCM cmpivot collection");
+                            }
+                        }
+
+                        else if (options.Fetch == "mssql")
+                        {
+                            if (!string.IsNullOrEmpty(options.SiteDatabase) && !string.IsNullOrEmpty(options.SiteCode))
+                            {
+                                // Query the site database for sessions, user rights, and local groups
+                                List<SiteDatabaseQueryResult> sessionQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "Sessions", options.FetchLookbackDays);
+                                List<SiteDatabaseQueryResult> userRightsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "UserRights", options.FetchLookbackDays);
+                                List<SiteDatabaseQueryResult> localGroupsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "LocalGroups", options.FetchLookbackDays);
+
+                                // Combine all the results into a single list
+                                List<SiteDatabaseQueryResult> combinedResults = new List<SiteDatabaseQueryResult>();
+                                combinedResults.AddRange(sessionQueryResults);
+                                combinedResults.AddRange(userRightsQueryResults);
+                                combinedResults.AddRange(localGroupsQueryResults);
+
+                                // Format the combined results
+                                JObject formattedResults = Fetch.FormatQueryResults(combinedResults);
+                                List<JObject> fetchData = new List<JObject>() { formattedResults };
+
+                                if (fetchData != null)
+                                {
+                                    // Send computers file to the ingest API
+                                    await APIClient.SendItAsync(fetchData);
+                                }
+                                else
+                                {
+                                    logger.LogError($"The site database ({options.SiteDatabase}) did not respond with FETCH data");
+                                }
+                            }
+
                             else
                             {
-                                logger.LogError($"The remote share ({options.FetchResultsFile}) did not respond with FETCH data");
+                                if (string.IsNullOrEmpty(options.SiteDatabase)) Console.WriteLine("[!] SiteDatabase was not specified");
+                                if (string.IsNullOrEmpty(options.SiteCode)) Console.WriteLine("[!] SiteCode was not specified");
+                                Console.WriteLine("[!] Skipping SCCM mssql collection");
                             }
                         }
                     }
 
-                    // SCCM collection
-                    if (!string.IsNullOrEmpty(options.SccmDatabase) && !string.IsNullOrEmpty(options.SccmSiteCode))
+                    else
                     {
-                        List<JObject> fetchResults = await Fetch.QuerySiteDatabase(options.SccmDatabase, options.SccmSiteCode);
+                        // LDAP collection
+                        // Create new chain links
+                        Links<IContext> links = new SharpLinks();
 
-                        if (fetchResults != null)
-                        {
-                            await APIClient.SendItAsync(fetchResults);
-                        }
-                        else
-                        {
-                            logger.LogError($"The site database ({options.SccmDatabase}) did not respond with FETCH data");
-                        }
+                        // Run our chain
+                        context = links.Initialize(context, ldapOptions);
+                        if (context.Flags.IsFaulted)
+                            return;
+                        context = links.TestConnection(context);
+                        if (context.Flags.IsFaulted)
+                            return;
+                        context = links.SetSessionUserName(options.OverrideUserName, context);
+                        context = links.InitCommonLib(context);
+                        context = links.GetDomainsForEnumeration(context);
+                        if (context.Flags.IsFaulted)
+                            return;
+                        context = links.StartBaseCollectionTask(context);
+                        context = await links.AwaitBaseRunCompletion(context);
+                        context = links.StartLoopTimer(context);
+                        context = links.StartLoop(context);
+                        context = await links.AwaitLoopCompletion(context);
+                        context = links.SaveCacheFile(context);
+                        links.Finish(context);
                     }
-
-                    if (!string.IsNullOrEmpty(options.SccmServer) && !string.IsNullOrEmpty(options.SccmSiteCode) && !string.IsNullOrEmpty(options.SccmCollectionId))
-                    {
-                        JObject cmPivotResponse = await Fetch.QuerySccmAdminService(options.SccmServer, options.SccmSiteCode, options.SccmCollectionId, options.FetchResultsFile, options.FetchTimeout);
-                        List<JObject> fetchResults = Fetch.PrepareCMPivotQueryResults(cmPivotResponse);
-
-                        if (fetchResults != null)
-                        {
-                            await APIClient.SendItAsync(fetchResults);
-                        }
-                        else
-                        {
-                            logger.LogError($"The SMS Provider ({options.SccmServer}) did not respond with FETCH data");
-                        }
-                    }
-                    else if (!string.IsNullOrEmpty(options.SccmServer) || !string.IsNullOrEmpty(options.SccmSiteCode) || !string.IsNullOrEmpty(options.SccmCollectionId))
-                    {
-                        if (string.IsNullOrEmpty(options.SccmServer)) Console.WriteLine("[!] SccmServer was not specified");
-                        if (string.IsNullOrEmpty(options.SccmSiteCode)) Console.WriteLine("[!] SccmSiteCode was not specified");
-                        if (string.IsNullOrEmpty(options.SccmCollectionId)) Console.WriteLine("[!] SccmCollectionId was not specified");
-                        Console.WriteLine("[!] Skipping SCCM collection");
-                    }
-
-                    /*
-                    // LDAP collection
-                    // Create new chain links
-                    Links<IContext> links = new SharpLinks();
-
-                    // Run our chain
-                    context = links.Initialize(context, ldapOptions);
-                    if (context.Flags.IsFaulted)
-                        return;
-                    context = links.TestConnection(context);
-                    if (context.Flags.IsFaulted)
-                        return;
-                    context = links.SetSessionUserName(options.OverrideUserName, context);
-                    context = links.InitCommonLib(context);
-                    context = links.GetDomainsForEnumeration(context);
-                    if (context.Flags.IsFaulted)
-                        return;
-                    context = links.StartBaseCollectionTask(context);
-                    context = await links.AwaitBaseRunCompletion(context);
-                    context = links.StartLoopTimer(context);
-                    context = links.StartLoop(context);
-                    context = await links.AwaitLoopCompletion(context);
-                    context = links.SaveCacheFile(context);
-                    links.Finish(context);
-                    */
                 });
             }
             catch (Exception ex)

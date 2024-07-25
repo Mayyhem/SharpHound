@@ -130,26 +130,37 @@ namespace Sharphound
         public bool CollectAllProperties { get; set; }
 
         // FETCH Options
+        [Option(HelpText = "Use FETCH to aggregate and upload previously collected data. Options: 'cmpivot', 'mssql', 'dir'")]
+        public string Fetch { get; set; }
+
         [Option(HelpText = "Number of days behind to collect FETCH results", Default = 7)]
         public int FetchLookbackDays { get; set; }
 
-        [Option(HelpText = "Path to files containing FETCH results", Default = "C:\\Windows\\CCM\\ScriptStore\\FetchResults.json")]
-        public string FetchResultsFile { get; set; }
+        // FETCH cmpivot / mssql
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) site code for collection")]
+        public string SiteCode { get; set; }
 
+        // FETCH cmpivot
         [Option(HelpText = "Timeout for SCCM to collect FETCH results in minutes", Default = 0)]
         public int FetchTimeout { get; set; }
 
-        [Option(HelpText = "Specify an SCCM (ConfigMgr) collection ID to retrieve FETCH results from", Default = null)]
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) collection ID to retrieve FETCH results from")]
         public string SccmCollectionId { get; set; }
 
-        [Option(HelpText = "Specify an SCCM (ConfigMgr) SMS Provider (typically the site server) for collection", Default = null)]
-        public string SccmServer { get; set; }
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) SMS Provider (typically the site server) for collection")]
+        public string SmsProvider { get; set; }
 
-        [Option(HelpText = "Specify an SCCM (ConfigMgr) site code for collection", Default = null)]
-        public string SccmSiteCode { get; set; }
+        // FETCH mssql
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) site database for collection")]
+        public string SiteDatabase { get; set; }
 
-        [Option(HelpText = "Specify an SCCM (ConfigMgr) site database for collection", Default = null)]
-        public string SccmDatabase { get; set; }
+        [Option(HelpText = "Specify the table name prefix", Default = "SpecterOps_BloodHound_")]
+        public string TablePrefix { get; set; }
+
+
+        // FETCH dir
+        [Option(HelpText = "Path to files containing FETCH results", Default = "C:\\Windows\\CCM\\ScriptStore\\FetchResults.json")]
+        public string FetchResultsFile { get; set; }
 
 
         //Loop Options
