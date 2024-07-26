@@ -314,13 +314,13 @@ function Write-Log {
             "DEBUG" { 
                 if ($Script:DebugPreference -eq 'Continue') { 
                     Write-Debug $logEntry 
-                    if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+                    if ($LogDir -ne 'off' -and $logFile) { $logEntry | Out-File -FilePath $logFile -Append }
                 } 
             }
             "VERBOSE" { 
                 if ($Script:VerbosePreference -eq 'Continue') { 
                     Write-Verbose $logEntry
-                    if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+                    if ($LogDir -ne 'off' -and $logFile) { $logEntry | Out-File -FilePath $logFile -Append }
                 }
             }
             "INFO" {
@@ -330,11 +330,11 @@ function Write-Log {
             "OUTPUT" {
                 # Don't include timestamps, send raw message to stdout
                 Write-Output $Message
-                if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+                if ($LogDir -ne 'off' -and $logFile) { $logEntry | Out-File -FilePath $logFile -Append }
             }
             "WARNING" { 
                 Write-Warning $logEntry 
-                if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+                if ($LogDir -ne 'off' -and $logFile) { $logEntry | Out-File -FilePath $logFile -Append }
             }
         }
     } 
@@ -342,7 +342,7 @@ function Write-Log {
     # Always display errors and exit on error
     if ($Level -eq "ERROR") {
         Write-Error $logEntry 
-        if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+        if ($LogDir -ne 'off' -and $logFile) { $logEntry | Out-File -FilePath $logFile -Append }
         exit 1
     }
 }
@@ -422,7 +422,7 @@ try {
                 $LogDir = (Get-Location).Path
             }
         }
-        $logFile = "$LogDir\FetchExecution_$thisComputerFQDN`_$now.log"
+        $Script:logFile = "$LogDir\FetchExecution_$thisComputerFQDN`_$now.log"
         Write-Log "INFO" "Writing logs to $logFile"
     }
 
