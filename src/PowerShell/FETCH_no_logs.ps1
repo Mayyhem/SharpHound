@@ -960,7 +960,7 @@ try {
         $jsonOutput | Out-File $WriteTo
     }   
 
-    if ($DeleteOlderThanDays -ne $null) {
+    if ($Wmi -and $DeleteOlderThanDays -ne $null) {
         Remove-OldInstances -DeleteOlderThanDays $DeleteOlderThanDays -WmiNamespace $WmiNamespace -WmiClassName "$WmiClassPrefix`Sessions"
         Remove-OldInstances -DeleteOlderThanDays $DeleteOlderThanDays -WmiNamespace $WmiNamespace -WmiClassName "$WmiClassPrefix`UserRights"
         Remove-OldInstances -DeleteOlderThanDays $DeleteOlderThanDays -WmiNamespace $WmiNamespace -WmiClassName "$WmiClassPrefix`LocalGroups"
