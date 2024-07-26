@@ -168,7 +168,7 @@ function Add-WmiClass {
 
         Write-Log "VERBOSE" "$WmiNamespace\$wmiClassName does not exist, creating it now"
 
-        # Add key property
+        # Add auto-incrementing key property
         foreach ($key in $KeyProperty.Keys) {
             $propertiesFormatted += "[key] $($KeyProperty[$key]) $key;`n"
         }
@@ -238,6 +238,10 @@ function Add-WmiClassInstance {
 
     # Create new class instance
     $instance = ([WMICLASS]"\\.\${WmiNamespace}:${wmiClassName}").CreateInstance()
+
+    # Set unique identifier
+    $maxID = (Get-WmiObject -Namespace $WmiNamespace -Class $wmiClassName | Measure-Object -Property InstanceID -Maximum).Maximum
+    $instance.InstanceID = $maxID + 1
 
     # Set CollectionDatetime
     $instance.CollectionDatetime = [Management.ManagementDateTimeConverter]::ToDmtfDateTime($(Get-Date))
@@ -354,17 +358,17 @@ Main
 -------------------------------------------
 #>
 
+# Display help text
+if ($Help) {
+    Get-Help $MyInvocation.MyCommand.Path
+    exit
+}
+
 $Script:InformationPreference = "Continue"
 Write-Log "INFO" "FETCH execution started"
 
 # Catch and log unexpected execution error messages
 try {
-
-    # Display help text
-    if ($Help) {
-        Get-Help $MyInvocation.MyCommand.Path
-        exit
-    }
 
     if (-not $OutputDir -and -not $StdOut -and -not $Wmi) {
         Write-Log "ERROR" "No output type selected (-OutputDir, -StdOut, -Wmi)"
@@ -475,8 +479,9 @@ try {
 
     # If using WMI option, create storage class if it doesn't exist
     if ($Wmi) {
-        $keyProp = @{ "CollectionDatetime" = "datetime" }
+        $keyProp = @{ "InstanceID" = "uint32" }
         $props = @{ 
+            "CollectionDatetime" = "datetime"
             "UserSID" = "string"
             "LastSeen" = "datetime"
             "ComputerSID" = "string"
@@ -602,8 +607,9 @@ try {
 
     # If using WMI option, create storage class if it doesn't exist
     if ($Wmi) {
-        $keyProp = @{ "CollectionDatetime" = "datetime" }
+        $keyProp = @{ "InstanceID" = "uint32" }
         $props = @{ 
+            "CollectionDatetime" = "datetime"
             "Privilege" = "string"
             "ObjectIdentifier" = "string"
             "ObjectType" = "string"
@@ -683,8 +689,9 @@ try {
 
     # If using WMI option, create storage class if it doesn't exist
     if ($Wmi) {
-        $keyProp = @{ "CollectionDatetime" = "datetime" }
+        $keyProp = @{ "InstanceID" = "uint32" }
         $props = @{ 
+            "CollectionDatetime" = "datetime"
             "GroupName" = "string"
             "GroupSID" = "string"
             "MemberType" = "string"

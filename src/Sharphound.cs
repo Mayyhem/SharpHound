@@ -558,14 +558,16 @@ namespace Sharphound
                                 combinedResults.AddRange(userRightsQueryResults);
                                 combinedResults.AddRange(localGroupsQueryResults);
 
-                                // Format the combined results
-                                JObject formattedResults = Fetch.FormatQueryResults(combinedResults);
-                                List<JObject> fetchData = new List<JObject>() { formattedResults };
+                                // Format and chunk the combined results
+                                List<JObject> fetchData = Fetch.FormatAndChunkQueryResults(combinedResults);
 
                                 if (fetchData != null)
                                 {
-                                    // Send computers file to the ingest API
-                                    await APIClient.SendItAsync(fetchData);
+                                    foreach (JObject chunk in fetchData)
+                                    {
+                                        // Send computers files to the ingest API in batches of 100 per job
+                                        await APIClient.SendItAsync(fetchData);
+                                    }
                                 }
                                 else
                                 {

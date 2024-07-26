@@ -53,7 +53,7 @@ namespace Sharphound
             request.Headers.Add(SignatureHeader, EncodeBase64(finalSignature));
             Console.WriteLine("Signature: " + EncodeBase64(finalSignature));
             Console.WriteLine("Token ID: " + _tokenId);
-            Console.WriteLine("Token Key: " + _token);
+            //Console.WriteLine("Token Key: " + _token);
 
             return await base.SendAsync(request, cancellationToken);
         }

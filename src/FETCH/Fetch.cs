@@ -521,7 +521,8 @@ namespace Sharphound
                     sessionDict[key] = (lastSeen, formattedLastSeen);
                 }
             }
-                else if (result.CollectionData.ContainsKey("Privilege00"))
+            
+            else if (result.CollectionData.ContainsKey("Privilege00"))
             {
                 // Process UserRights data
                 var privilege = result.CollectionData["Privilege00"];
@@ -534,6 +535,7 @@ namespace Sharphound
                 }
                 userRights[privilege].Add((rightObjectIdentifier, objectType));
             }
+
             else if (result.CollectionData.ContainsKey("GroupName00"))
             {
                 // Process LocalGroups data
@@ -557,6 +559,7 @@ namespace Sharphound
                 }
 
                 var results = (JArray)localGroups[groupSID]["Results"];
+
                 // Add the member to the group if it's not already there
                 if (!results.Any(r => (string)r["ObjectIdentifier"] == memberSID))
                 {
@@ -610,6 +613,37 @@ namespace Sharphound
 
         return computerData;
     }
+
+    public static List<JObject> FormatAndChunkQueryResults(List<SiteDatabaseQueryResult> results, int chunkSize = 100)
+        {
+            var formattedResults = FormatQueryResults(results);
+            var dataArray = (JArray)formattedResults["data"];
+
+            // If there are 100 or fewer computers, return the original result in a list
+            if (dataArray.Count <= chunkSize)
+            {
+                return new List<JObject> { formattedResults };
+            }
+
+            // Split the data array into chunks
+            var chunks = new List<JObject>();
+            for (int i = 0; i < dataArray.Count; i += chunkSize)
+            {
+                var chunkArray = new JArray(dataArray.Skip(i).Take(chunkSize));
+                var chunkObject = new JObject
+                {
+                    ["meta"] = new JObject(formattedResults["meta"]),
+                    ["data"] = chunkArray
+                };
+
+                // Update the count in the meta object for this chunk
+                chunkObject["meta"]["count"] = chunkArray.Count;
+
+                chunks.Add(chunkObject);
+            }
+
+            return chunks;
+        }
 
         public class TrustAllCertsPolicy
         {

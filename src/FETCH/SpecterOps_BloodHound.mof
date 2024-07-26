@@ -5,16 +5,19 @@
 class BloodHound_Sessions : SMS_Class_Template
 {
     [ SMS_Report (TRUE), key ]
-    DateTime     CollectionDatetime;
+    UInt32	InstanceID;
 
     [ SMS_Report (TRUE) ]
-    String     UserSID;
+    DateTime	CollectionDatetime;
 
     [ SMS_Report (TRUE) ]
-    DateTime     LastSeen;
+    String	UserSID;
 
     [ SMS_Report (TRUE) ]
-    String     ComputerSID;
+    DateTime	LastSeen;
+
+    [ SMS_Report (TRUE) ]
+    String	ComputerSID;
 };
 
 [ SMS_Report (TRUE),
@@ -24,16 +27,19 @@ class BloodHound_Sessions : SMS_Class_Template
 class BloodHound_UserRights : SMS_Class_Template
 {
     [ SMS_Report (TRUE), key ]
-    DateTime     CollectionDatetime;
+    UInt32	InstanceID;
 
     [ SMS_Report (TRUE) ]
-    String     Privilege;
+    DateTime	CollectionDatetime;
 
     [ SMS_Report (TRUE) ]
-    String     ObjectIdentifier;
+    String	Privilege;
 
     [ SMS_Report (TRUE) ]
-    String     ObjectType;
+    String	ObjectIdentifier;
+
+    [ SMS_Report (TRUE) ]
+    String	ObjectType;
 };
 
 [ SMS_Report (TRUE),
@@ -43,17 +49,20 @@ class BloodHound_UserRights : SMS_Class_Template
 class BloodHound_LocalGroups : SMS_Class_Template
 {
     [ SMS_Report (TRUE), key ]
-    DateTime     CollectionDatetime;
+    UInt32	InstanceID;
 
     [ SMS_Report (TRUE) ]
-    String     GroupName;
+    DateTime	CollectionDatetime;
 
     [ SMS_Report (TRUE) ]
-    String     GroupSID;
+    String	GroupName;
 
     [ SMS_Report (TRUE) ]
-    String     MemberType;
+    String	GroupSID;
 
     [ SMS_Report (TRUE) ]
-    String     MemberSID;
+    String	MemberType;
+
+    [ SMS_Report (TRUE) ]
+    String	MemberSID;
 };
