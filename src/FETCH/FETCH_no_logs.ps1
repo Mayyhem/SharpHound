@@ -28,6 +28,9 @@ Store results in the specified directory (default: disabled).
 .PARAMETER SessionLookbackDays
 Number of days to look back for sessions (default: 7 days).
 
+.PARAMETER Silent
+Do not write to the console or any output streams (default: disabled).
+
 .PARAMETER StdOut
 Write BloodHound data to the console (default: disabled).
 
@@ -49,31 +52,21 @@ Store results in local WMI classes named with the specified prefix (e.g., a valu
 .PARAMETER WmiNamespace
 Store results in local WMI classes in the specified namespace (default: 'root\cimv2').
 
-## Deprecate
-
-.PARAMETER DebugMode
-Use this switch to enable debug mode.
-
-.PARAMETER OutputToShare
-Specifies a UNC path to output data. Leave empty to output to a local file or stdout.
-
-.PARAMETER TempDir
-Specifies the path for temporary files created to enumerate user rights. Default is $env:TEMP.
-
-.PARAMETER WriteTo
-Specifies the output file path for results or 'stdout' to write to the console.
-
 .EXAMPLE
 .\FETCH.ps1 -Help
 # Display help text
 
 .EXAMPLE
-.\FETCH.ps1 -SessionLookbackDays 10 -WriteTo C:\Windows\Temp\FetchResults.json
-# Collect sessions from the last 10 days of event logs, output to a local file
+.\FETCH.ps1 -Wmi -Verbose
+# Output to class instances in the local WMI repository, show verbose messages
 
 .EXAMPLE
-.\FETCH.ps1 -WriteTo stdout
-# Output to stdout
+.\FETCH.ps1 -SessionLookbackDays 10 -OutputDir C:\Windows\Temp
+# Collect sessions from the last 10 days of event logs, output to a local directory
+
+.EXAMPLE
+.\FETCH.ps1 -StdOut -Silent
+# Output to stdout, silence other output streams
 
 .LINK
 https://github.com/BloodHoundAD/SharpHound
@@ -113,6 +106,8 @@ param(
     [ValidateRange(1,365)]
     [int]$SessionLookbackDays = 7,
 
+    [switch]$Silent,
+
     # Display BloodHound data in console after collection
     [switch]$StdOut,
 
@@ -145,37 +140,7 @@ param(
         }
         $true
     })]
-    [string]$WmiNamespace = "root\cimv2",
-
-    # DEPRECATE
-    # Validate that the output directory path is a UNC path if used, ignored if WriteTo is stdout
-    [ValidateScript({
-        if ([string]::IsNullOrEmpty($_)) {
-            $true
-        }
-        elseif ($_ -match '^\\\\[^\\]+\\[^\\]+\\?$') {
-            if (Test-Path $_) {
-                $true
-            } else {
-                throw "The specified UNC path does not exist: $_"
-            }
-        } else {
-            throw "The output directory path must be a UNC path (e.g., '\\server\share' or '\\server\share\')"
-        }
-    })]
-    [string]$OutputToShare = $null,
-
-    # Validate that the output file path exists or is set to "stdout", path ignored if OutputToShare provided
-    [ValidateScript({
-        if ($_ -eq "stdout" -or ((Test-Path (Split-Path -Path $_)) -and $_ -match '\.json$')) {
-            $true
-        } elseif (-not (Test-Path (Split-Path -Path $_))) {
-            throw "The specified directory does not exist: $(Split-Path -Path $_)"
-        } else {
-            throw "Output must be 'stdout' or a local/remote file path ending in '.json'"
-        }
-    })]
-    [string]$WriteTo = "C:\Windows\CCM\ScriptStore\FetchResults.json"
+    [string]$WmiNamespace = "root\cimv2"
 )
 
 
@@ -248,7 +213,7 @@ $($propertiesFormatted.TrimEnd("`n"))
         Remove-Item -Path $tempFilePath -Force
 
     } else {
-        Write-Log "VERBOSE" "$WmiNamespace\$wmiClassName already exists, skipping"
+        Write-Log "VERBOSE" "$WmiNamespace\$wmiClassName already exists, skipping creation"
     }
 }
 
@@ -340,92 +305,47 @@ function Write-Log {
         [string]$Level,
         [string]$Message
     )
+
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
     $logEntry = "$timestamp UTC - $Message"
     
-    switch ($Level) {
-        "DEBUG" { 
-            if ($Script:DebugPreference -eq 'Continue') { 
-                Write-Debug $logEntry 
+    if (-not $Silent) {
+        switch ($Level) {
+            "DEBUG" { 
+                if ($Script:DebugPreference -eq 'Continue') { 
+                    Write-Debug $logEntry 
+                    if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+                } 
+            }
+            "VERBOSE" { 
+                if ($Script:VerbosePreference -eq 'Continue') { 
+                    Write-Verbose $logEntry
+                    if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+                }
+            }
+            "INFO" {
+                Write-Information $logEntry
+                if ($LogDir -ne 'off' -and $logFile) { $logEntry | Out-File -FilePath $logFile -Append }
+            }
+            "OUTPUT" {
+                # Don't include timestamps, send raw message to stdout
+                Write-Output $Message
                 if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
-            } 
-        }
-        "VERBOSE" { 
-            if ($Script:VerbosePreference -eq 'Continue') { 
-                Write-Verbose $logEntry
+            }
+            "WARNING" { 
+                Write-Warning $logEntry 
                 if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
             }
         }
-        "WARNING" { 
-            Write-Warning $logEntry 
-            if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
-        }
-        "ERROR" { 
-            Write-Error $logEntry 
-            if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
-        }
-        default {
-            Write-Host $logEntry
-            if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
-        }
+    } 
+
+    # Always display errors and exit on error
+    if ($Level -eq "ERROR") {
+        Write-Error $logEntry 
+        if ($LogDir -ne 'off') { $logEntry | Out-File -FilePath $logFile -Append }
+        exit 1
     }
 }
-
-
-<#
--------------------------------------------
-Setup
--------------------------------------------
-#>
-
-# Display help text
-if ($Help) {
-    Get-Help $MyInvocation.MyCommand.Path
-    exit
-}
-
-# Log to the specified directory, $OutputDir, current working directory, or off
-if ($LogDir -ne "off") {
-    if ([string]::IsNullOrEmpty($LogDir)) {
-        if (-not [string]::IsNullOrEmpty($OutputDir)) {
-            $LogDir = $OutputDir
-        } else {
-            $LogDir = (Get-Location).Path
-        }
-    }
-    $logFile = "$LogDir\FetchExecution.log"
-    Write-Log "VERBOSE" "Writing logs to $logFile"
-}
-
-# Write temp files to the specified directory, $OutputDir, or cwd
-if ([string]::IsNullOrEmpty($TempDir)) {
-    if (-not [string]::IsNullOrEmpty($OutputDir)) {
-        $TempDir = $OutputDir
-    } else {
-        $TempDir = (Get-Location).Path
-    }
-    Write-Log "VERBOSE" "Writing temp files to $TempDir\"
-}
-
-# Initialize logging
-if ($DebugPreference -eq 'Inquire') {
-    $Script:DebugPreference = "Continue"
-    $Script:VerbosePreference = "Continue"
-}
-
-# Trace logging - display lines as they are executed and store transcript
-if ($Trace) {
-    $tracePath = "$LogDir\FetchTrace_$((Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss"))-UTC.log"
-    Write-Log "VERBOSE" "Writing trace to $tracePath"
-    Set-PSDebug -Trace 1
-    Start-Transcript -Path $tracePath
-}
-
-if ($OutputDir) { 
-    $outputFile = "$OutputDir\FetchResults.json" 
-    Write-Log "VERBOSE" "Writing results to $outputFile"
-}
-
 
 
 <#
@@ -434,21 +354,30 @@ Main
 -------------------------------------------
 #>
 
-Write-Log "VERBOSE" "FETCH execution started"
+$Script:InformationPreference = "Continue"
+Write-Log "INFO" "FETCH execution started"
 
 # Catch and log unexpected execution error messages
 try {
 
+    # Display help text
+    if ($Help) {
+        Get-Help $MyInvocation.MyCommand.Path
+        exit
+    }
+
+    if (-not $OutputDir -and -not $StdOut -and -not $Wmi) {
+        Write-Log "ERROR" "No output type selected (-OutputDir, -StdOut, -Wmi)"
+    }
+
     # Confirm this is running on a domain-joined machine
     if (-not (Get-WmiObject Win32_ComputerSystem).PartOfDomain) {
-        Write-Log "ERROR" "This system is not joined to Active Directory. Exiting."
-        exit 1
+        Write-Log "ERROR" "This system is not joined to Active Directory."
     }
 
     # Confirm this is running in a high integrity context
     if (-not (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Log "ERROR" "This script must be executed with administrator privileges. Exiting."
-        exit 1
+        Write-Log "ERROR" "This script must be executed with administrator privileges."
     }
 
     # Collect local system domain computer account SID via LDAP
@@ -465,7 +394,7 @@ try {
         $thisComputerDomainSID = $thisComputerDomainAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
         Write-DebugVar thisComputerDomainSID
     } catch {
-        Write-Log "VERBOSE" "Could not translate the domain account to a SID: $sourceComputerDomainAccount"
+        Write-Log "ERROR" "Could not translate the domain account to a SID: $sourceComputerDomainAccount"
     }
 
     # Collect local system FQDN
@@ -476,6 +405,64 @@ try {
     $thisComputerMachineSID = ((Get-WmiObject -Class Win32_UserAccount -Filter "LocalAccount='True'" | Select-Object -First 1).SID -replace "-\d+$")
     Write-DebugVar thisComputerMachineSID
 
+    # Initialize logging
+    $now = "$((Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss"))-UTC"
+
+    if ($DebugPreference -eq 'Inquire') {
+        $Script:DebugPreference = "Continue"
+        $Script:VerbosePreference = "Continue"
+    }
+
+    # Log to the specified directory, $OutputDir, current working directory, or off
+    if ($LogDir -ne "off") {
+        if ([string]::IsNullOrEmpty($LogDir)) {
+            if (-not [string]::IsNullOrEmpty($OutputDir)) {
+                $LogDir = $OutputDir
+            } else {
+                $LogDir = (Get-Location).Path
+            }
+        }
+        $logFile = "$LogDir\FetchExecution_$thisComputerFQDN`_$now.log"
+        Write-Log "INFO" "Writing logs to $logFile"
+    }
+
+    # Write temp files to the specified directory, $OutputDir, or cwd
+    if ([string]::IsNullOrEmpty($TempDir)) {
+        if (-not [string]::IsNullOrEmpty($OutputDir)) {
+            $TempDir = $OutputDir
+        } else {
+            $TempDir = (Get-Location).Path
+        }
+        Write-Log "INFO" "Writing temp files to $TempDir\"
+    }
+
+    # Trace logging - display lines as they are executed and store transcript
+    if ($Trace) {
+        $tracePath = "$LogDir\FetchTrace_$thisComputerFQDN`_$now.log"
+        Write-Log "INFO" "Writing trace to $tracePath"
+        Set-PSDebug -Trace 1
+        Start-Transcript -Path $tracePath
+    }
+
+    # Output to file
+    if ($OutputDir) { 
+        $outputFile = "$OutputDir\FetchResults_$thisComputerFQDN`_$now.json" 
+        Write-Log "INFO" "Writing results to $outputFile"
+    }
+
+    # Output to stdout
+    if ($StdOut) {
+        Write-Log "INFO" "Writing results to stdout" 
+    }
+
+    # Output to WMI
+    if ($Wmi) {
+        Write-Log "INFO" "Writing results to: 
+                                        $WmiNamespace\$WmiClassPrefix`Sessions
+                                        $WmiNamespace\$WmiClassPrefix`UserRights
+                                        $WmiNamespace\$WmiClassPrefix`LocalGroups"
+    }
+
 
     <#
     -------------------------------------------
@@ -483,7 +470,7 @@ try {
     -------------------------------------------
     #>
 
-    Write-Log "VERBOSE" "Collecting sessions"
+    Write-Log "INFO" "Collecting sessions"
     $collectedSessions = @()
 
     # If using WMI option, create storage class if it doesn't exist
@@ -592,8 +579,10 @@ try {
             }
         }
     } else {
-        Write-Log "VERBOSE" "No logon events found in the lookback period."
+        Write-Log "INFO" "No logon events found in the lookback period."
     }
+
+    Write-Log "INFO" "Found sessions for $($collectedSessions.Count) domain principals"
 
     $sessions = @{
         "Results" = $collectedSessions
@@ -608,7 +597,7 @@ try {
     -------------------------------------------
     #>
 
-    Write-Log "VERBOSE" "Collecting user rights assignments"
+    Write-Log "INFO" "Collecting user rights assignments"
     $userRights = @()
 
     # If using WMI option, create storage class if it doesn't exist
@@ -676,11 +665,12 @@ try {
             }
         }
         
-
         $userRights += $userRight
         Write-DebugVar userRight
     }
+
     Write-DebugVar userRights
+    Write-Log "INFO" "Found user rights for $($userRights.Count) privileges"
 
     <#
     -------------------------------------------
@@ -688,7 +678,7 @@ try {
     -------------------------------------------
     #>
 
-    Write-Log "VERBOSE" "Collecting local group memberships"
+    Write-Log "INFO" "Collecting local group memberships"
     $groups = @()
 
     # If using WMI option, create storage class if it doesn't exist
@@ -860,7 +850,9 @@ try {
     } else {
         Write-Log "VERBOSE" "This system is a domain controller, skipping local group membership enumeration"
     }
+
     Write-DebugVar groups
+    Write-Log "INFO" "Found membership for $($groups.Count) local groups"
 
 
     <#
@@ -936,31 +928,18 @@ try {
     $jsonOutput = ConvertTo-CustomJson $output
     Write-DebugVar jsonOutput
 
-    # Use stdout if specified
+    # Write to file if output directory is specified
+    if ($OutputDir) {
+        $jsonOutput | Out-File $outputFile
+        Write-Log "INFO" "Results saved to $outputFile"
+    }
+
+    # Write to stdout if specified
     if ($StdOut) {
-        $jsonOutput
+        Write-Log "OUTPUT" $jsonOutput
+    }
 
-    } else {
-
-        # Use output directory for SMB collection if specified
-        if ($OutputToShare) {
-            $todaysDirectory = Join-Path -Path $OutputToShare -ChildPath (Get-Date -Format "yyyyMMdd")
-            Write-DebugVar todaysDirectory
-
-            # Create a directory for today if it does not already exist
-            if (-not (Test-Path $todaysDirectory)) {
-                New-Item -Path $todaysDirectory -ItemType Directory
-            } else {
-                Write-Log "DEBUG" "$todaysDirectory already exists"
-            }
-            # Use the computer's domain SID in output files written to network shares
-            $WriteTo = Join-Path -Path $todaysDirectory -ChildPath "$($thisComputerDomainSID)_$((Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')).json"
-            Write-DebugVar WriteTo
-        }
-        $jsonOutput | Out-File $WriteTo
-    }   
-
-    if ($Wmi -and $DeleteOlderThanDays -ne $null) {
+    if ($Wmi -and $null -ne $DeleteOlderThanDays) {
         Remove-OldInstances -DeleteOlderThanDays $DeleteOlderThanDays -WmiNamespace $WmiNamespace -WmiClassName "$WmiClassPrefix`Sessions"
         Remove-OldInstances -DeleteOlderThanDays $DeleteOlderThanDays -WmiNamespace $WmiNamespace -WmiClassName "$WmiClassPrefix`UserRights"
         Remove-OldInstances -DeleteOlderThanDays $DeleteOlderThanDays -WmiNamespace $WmiNamespace -WmiClassName "$WmiClassPrefix`LocalGroups"
@@ -971,7 +950,7 @@ try {
 
 } finally {
     # End logging
-    Write-Log "VERBOSE" "FETCH execution completed"
+    Write-Log "INFO" "FETCH execution completed"
 
     # Disable trace logging
     if ($Trace) {
