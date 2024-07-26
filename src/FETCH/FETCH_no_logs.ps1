@@ -324,7 +324,7 @@ function Write-Log {
                 }
             }
             "INFO" {
-                Write-Information $logEntry
+                Write-Information "INFO: $logEntry"
                 if ($LogDir -ne 'off' -and $logFile) { $logEntry | Out-File -FilePath $logFile -Append }
             }
             "OUTPUT" {
