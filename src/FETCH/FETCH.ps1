@@ -13,6 +13,9 @@ Requirements:
   - PowerShell 2.0 or higher
   - .NET Framework 3.5 or higher
 
+.PARAMETER CMPivotDir
+Stage results in the specified directory for pickup using CMPivot (default: disabled).
+
 .PARAMETER Debug
 Enable debugging of script execution events (default: disabled).
 
@@ -77,6 +80,16 @@ https://github.com/BloodHoundAD/SharpHound
 param(
 
     [switch]$Help,
+
+    # Validate that the output directory exists
+    [ValidateScript({
+        if ([string]::IsNullOrEmpty($_) -or (Test-Path $_)) {
+            $true
+        } else {
+            throw "The specified directory does not exist: $_"
+        }
+    })]
+    [string]$CMPivotDir = $null,    
 
     # Delete data older than the specified number of days when the script is run
     [ValidateRange(1,365)]
@@ -448,8 +461,14 @@ try {
         Start-Transcript -Path $tracePath
     }
 
-    # Output to file
-    if ($OutputDir) { 
+    # Stage for CMPivot with static file name
+    if ($CMPivotDir) { 
+        $outputFile = "$CMPivotDir\FetchResults.json" 
+        Write-Log "INFO" "Writing results to $outputFile"
+    } 
+
+    # Otherwise append file name with computer name and timestamp
+    elseif ($OutputDir) { 
         $outputFile = "$OutputDir\FetchResults_$thisComputerFQDN`_$now.json" 
         Write-Log "INFO" "Writing results to $outputFile"
     }

@@ -130,11 +130,11 @@ namespace Sharphound
         public bool CollectAllProperties { get; set; }
 
         // FETCH Options
-        [Option(HelpText = "Use FETCH to aggregate and upload previously collected data. Options: 'cmpivot', 'mssql', 'dir'")]
+        [Option(HelpText = "Use FETCH to aggregate and upload previously collected data. Options: 'wmi', 'mssql', 'cmpivot', 'dir'")]
         public string Fetch { get; set; }
 
         [Option(HelpText = "Number of days behind to collect FETCH results", Default = 7)]
-        public int FetchLookbackDays { get; set; }
+        public int LookbackDays { get; set; }
 
         // FETCH cmpivot / mssql
         [Option(HelpText = "Specify an SCCM (ConfigMgr) site code for collection")]
@@ -145,9 +145,9 @@ namespace Sharphound
         public int FetchTimeout { get; set; }
 
         [Option(HelpText = "Specify an SCCM (ConfigMgr) collection ID to retrieve FETCH results from")]
-        public string SccmCollectionId { get; set; }
+        public string CollectionId { get; set; }
 
-        [Option(HelpText = "Specify an SCCM (ConfigMgr) SMS Provider (typically the site server) for collection")]
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) SMS Provider for collection")]
         public string SmsProvider { get; set; }
 
         // FETCH mssql
@@ -157,10 +157,9 @@ namespace Sharphound
         [Option(HelpText = "Specify the table name prefix", Default = "SpecterOps_BloodHound_")]
         public string TablePrefix { get; set; }
 
-
         // FETCH dir
-        [Option(HelpText = "Path to files containing FETCH results", Default = "C:\\Windows\\CCM\\ScriptStore\\FetchResults.json")]
-        public string FetchResultsFile { get; set; }
+        [Option(HelpText = "Path to directory containing FETCH results (FetchResults.json)", Default = "%SystemRoot%\\CCM\\ScriptStore\\")]
+        public string FetchResultsDir { get; set; }
 
 
         //Loop Options

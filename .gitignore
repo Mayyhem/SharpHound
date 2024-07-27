@@ -607,3 +607,7 @@ FodyWeavers.xsd
 # JetBrains Rider
 .idea/
 *.sln.iml
+
+# Fetch
+FetchResults*.json
+FetchExecution*.log

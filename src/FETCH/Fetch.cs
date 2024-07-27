@@ -110,7 +110,7 @@ namespace Sharphound
             }
         }
 
-        public static int GetSccmOperationIdForQuery(string smsProvider, string siteCode, string collectionId, string fetchResultsFile)
+        public static int GetSccmOperationIdForQuery(string query, string smsProvider, string siteCode, string collectionId)
         {
             int operationId = 0;
 
@@ -119,8 +119,6 @@ namespace Sharphound
             ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
 
             // Prepare query
-            string fetchResultsFileFormatted = fetchResultsFile.Replace(@"\", @"\\");
-            string query = $"FileContent('{fetchResultsFileFormatted}')";
             string json = $"{{\"InputQuery\":\"{query}\"}}";
             byte[] data = Encoding.UTF8.GetBytes(json);
 
@@ -139,7 +137,7 @@ namespace Sharphound
                     stream.Write(data, 0, data.Length);
                 }
 
-                Console.WriteLine($"[+] Sending CMPivot query to AdminService for contents of {fetchResultsFile} on clients in collection {collectionId}");
+                Console.WriteLine($"[+] Sending CMPivot query to AdminService for {query} on clients in collection {collectionId}");
                 using (response = (HttpWebResponse)request.GetResponse())
                 {
                     var statusCode = response.StatusCode;
@@ -175,7 +173,7 @@ namespace Sharphound
                             //Handle 400 Error and fall back to SMS Provider method call to insure query is valid
                             query = !string.IsNullOrEmpty(query) ? query.Replace(@"\", @"\\") : null;
                             Console.WriteLine("[!] Received a 400 ('Bad request') response from the API. Falling back to SMS Provider WMI method ");
-                            operationId = InitiateSccmClientOperationExMethodCall(query, smsProvider, collectionId, fetchResultsFile, siteCode);
+                            operationId = InitiateSccmClientOperationExMethodCall(query, smsProvider, collectionId, null, siteCode);
                             if (operationId != 0)
                             {
                                 return operationId;
@@ -208,9 +206,9 @@ namespace Sharphound
             }
         }
 
-        public static List<JObject> PrepareCMPivotQueryResults(JObject cmPivotResponse)
+        public static List<JObject> PrepareFileContentQueryResults(JObject cmPivotResponse)
         {
-            List<JObject> cmPivotResults = new List<JObject>();
+            List<JObject> fileContentResults = new List<JObject>();
 
             // Extract the "Content" property for each "Line"
             var queryResults = cmPivotResponse["value"]
@@ -234,9 +232,9 @@ namespace Sharphound
                 {
                     metaObject["version"] = 5;
                 }
-                cmPivotResults.Add(hostContent);
+                fileContentResults.Add(hostContent);
             }
-            return cmPivotResults;
+            return fileContentResults;
         }
 
         public static async Task<List<JObject>> GetFetchResultsFromShare(string remoteDirectory, int lookbackDays)
@@ -283,18 +281,18 @@ namespace Sharphound
             return fetchResults;
         }
 
-        public static async Task<JObject> QuerySccmAdminService(string smsProvider, string siteCode, string collectionId, string fetchResultsFile, int fetchTimeout)
+        public static async Task<JObject> QuerySccmAdminService(string query, string smsProvider, string siteCode, string collectionId, int timeout)
         {
-            int operationId = GetSccmOperationIdForQuery(smsProvider, siteCode, collectionId, fetchResultsFile);
+            int operationId = GetSccmOperationIdForQuery(query, smsProvider, siteCode, collectionId);
 
             if (operationId != 0)
             {
                 int attemptCounter = 1;
                 int maxAttempts = 0;
-                if (fetchTimeout > 0)
+                if (timeout > 0)
                 {
                     // User supplied timeout from minutes to seconds with 1 request every 10 seconds
-                    maxAttempts = fetchTimeout * 60 / 10;
+                    maxAttempts = timeout * 60 / 10;
                 }
                 int status = 0;
                 string url = $"https://{smsProvider}/AdminService/v1.0/Collections('{collectionId}')/AdminService.CMPivotResult(OperationId={operationId})";
@@ -309,7 +307,7 @@ namespace Sharphound
                 Console.WriteLine($"[+] Querying for CMPivot operation results at {url}");
 
                 // Loop infinitely or until the provided timeout is reached, checking for results every 10 seconds
-                while (attemptCounter <= maxAttempts || fetchTimeout == 0)
+                while (attemptCounter <= maxAttempts || timeout == 0)
                 {
                     await Task.Delay(TimeSpan.FromSeconds(10));
                     Console.WriteLine($"[+] Checking whether CMPivot has finished querying clients: attempt {attemptCounter} of {(maxAttempts > 0 ? maxAttempts : "∞")}");
@@ -478,7 +476,7 @@ namespace Sharphound
             ["ObjectIdentifier"] = objectIdentifier,
             ["Properties"] = new JObject
             {
-                ["name"] = firstResult.CollectedComputerNetbiosName
+                ["name"] = $"{firstResult.CollectedComputerNetbiosName}.{firstResult.CollectedComputerFullDomainName}"
             }
         };
 
