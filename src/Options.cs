@@ -140,6 +140,10 @@ namespace Sharphound
         [Option(HelpText = "Specify an SCCM (ConfigMgr) site code for collection")]
         public string SiteCode { get; set; }
 
+        // FETCH cmpivot / dir
+        [Option(HelpText = "Path to directory containing FETCH results", Default = "%SystemRoot%\\CCM\\ScriptStore\\")]
+        public string FetchResultsDir { get; set; }
+
         // FETCH cmpivot
         [Option(HelpText = "Timeout for SCCM to collect FETCH results in minutes", Default = 0)]
         public int FetchTimeout { get; set; }
@@ -157,9 +161,7 @@ namespace Sharphound
         [Option(HelpText = "Specify the table name prefix", Default = "SpecterOps_BloodHound_")]
         public string TablePrefix { get; set; }
 
-        // FETCH dir
-        [Option(HelpText = "Path to directory containing FETCH results (FetchResults.json)", Default = "%SystemRoot%\\CCM\\ScriptStore\\")]
-        public string FetchResultsDir { get; set; }
+
 
 
         //Loop Options

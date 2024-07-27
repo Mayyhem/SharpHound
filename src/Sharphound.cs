@@ -493,96 +493,119 @@ namespace Sharphound
 
 
                     // FETCH retrieval, aggregation, and upload to ingest API
-                    if (options.Fetch == "adminservice")
+                    if (!string.IsNullOrEmpty(options.Fetch))
                     {
-                        // Not yet implemented
-                    }
-
-                    else if (options.Fetch == "mssql")
-                    {
-                        if (!string.IsNullOrEmpty(options.SiteDatabase) && !string.IsNullOrEmpty(options.SiteCode))
+                        if (options.Fetch == "adminservice")
                         {
-                            // Query the site database for sessions, user rights, and local groups
-                            List<SiteDatabaseQueryResult> sessionQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "Sessions", options.LookbackDays);
-                            List<SiteDatabaseQueryResult> userRightsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "UserRights", options.LookbackDays);
-                            List<SiteDatabaseQueryResult> localGroupsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "LocalGroups", options.LookbackDays);
+                            // Not yet implemented
+                        }
 
-                            // Combine all the results into a single list
-                            List<SiteDatabaseQueryResult> combinedResults = new List<SiteDatabaseQueryResult>();
-                            combinedResults.AddRange(sessionQueryResults);
-                            combinedResults.AddRange(userRightsQueryResults);
-                            combinedResults.AddRange(localGroupsQueryResults);
+                        else if (options.Fetch == "wmi")
+                        {
+                            // Not yet implemented
+                        }
 
-                            // Format and chunk the combined results
-                            List<JObject> fetchData = Fetch.FormatAndChunkQueryResults(combinedResults);
-
-                            if (fetchData != null)
+                        // Collect hardware inventory data from the site database
+                        else if (options.Fetch == "mssql")
+                        {
+                            if (!string.IsNullOrEmpty(options.SiteDatabase) && !string.IsNullOrEmpty(options.SiteCode))
                             {
-                                foreach (JObject chunk in fetchData)
+                                // Query the site database for sessions, user rights, and local groups
+                                List<SiteDatabaseQueryResult> sessionQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "Sessions", options.LookbackDays);
+                                List<SiteDatabaseQueryResult> userRightsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "UserRights", options.LookbackDays);
+                                List<SiteDatabaseQueryResult> localGroupsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "LocalGroups", options.LookbackDays);
+
+                                // Combine all the results into a single list
+                                List<SiteDatabaseQueryResult> combinedResults = new List<SiteDatabaseQueryResult>();
+                                combinedResults.AddRange(sessionQueryResults);
+                                combinedResults.AddRange(userRightsQueryResults);
+                                combinedResults.AddRange(localGroupsQueryResults);
+
+                                // Format and chunk the combined results
+                                List<JObject> fetchData = Fetch.FormatAndChunkQueryResults(combinedResults);
+
+                                if (fetchData != null)
                                 {
-                                    // Send computers files to the ingest API in batches of 100 per job
-                                    await APIClient.SendItAsync(fetchData);
+                                    foreach (JObject chunk in fetchData)
+                                    {
+                                        // Send computers files to the ingest API in batches of 100 per job
+                                        await APIClient.SendItAsync(fetchData);
+                                    }
+                                }
+                                else
+                                {
+                                    logger.LogError($"The site database ({options.SiteDatabase}) did not respond with FETCH data");
                                 }
                             }
+
                             else
                             {
-                                logger.LogError($"The site database ({options.SiteDatabase}) did not respond with FETCH data");
+                                if (string.IsNullOrEmpty(options.SiteDatabase)) Console.WriteLine("[!] SiteDatabase was not specified");
+                                if (string.IsNullOrEmpty(options.SiteCode)) Console.WriteLine("[!] SiteCode was not specified");
+                                Console.WriteLine("[!] Skipping SCCM mssql collection");
                             }
                         }
 
-                        else
+                        // Collection with CMPivot
+                        else if (options.Fetch == "cmpivot")
                         {
-                            if (string.IsNullOrEmpty(options.SiteDatabase)) Console.WriteLine("[!] SiteDatabase was not specified");
-                            if (string.IsNullOrEmpty(options.SiteCode)) Console.WriteLine("[!] SiteCode was not specified");
-                            Console.WriteLine("[!] Skipping SCCM mssql collection");
-                        }
-                    }
-
-                    else if (options.Fetch == "cmpivot")
-                    {
-                        // SCCM collection with CMPivot
-                        if (!string.IsNullOrEmpty(options.SmsProvider) && !string.IsNullOrEmpty(options.SiteCode) && !string.IsNullOrEmpty(options.CollectionId))
-                        {
-                            string fetchResultsDirFormatted = options.FetchResultsDir.Replace(@"\", @"\\");
-                            string query = $"FileContent('{fetchResultsDirFormatted}FetchResults.json')";
-
-                            JObject fileContentQueryResponse = await Fetch.QuerySccmAdminService(query, options.SmsProvider, options.SiteCode, options.CollectionId, options.FetchTimeout);
-                            if (fileContentQueryResponse != null)
+                            if (!string.IsNullOrEmpty(options.SmsProvider) && !string.IsNullOrEmpty(options.SiteCode) && !string.IsNullOrEmpty(options.CollectionId))
                             {
-                                List<JObject> fileContentQueryResults = Fetch.PrepareFileContentQueryResults(fileContentQueryResponse);
-                                await APIClient.SendItAsync(fileContentQueryResults);
+                                string fetchResultsDirFormatted = options.FetchResultsDir.Replace(@"\", @"\\");
+                                string query = $"FileContent('{fetchResultsDirFormatted}FetchResults.json')";
+
+                                JObject fileContentQueryResponse = await Fetch.QuerySccmAdminService(query, options.SmsProvider, options.SiteCode, options.CollectionId, options.FetchTimeout);
+                                if (fileContentQueryResponse != null)
+                                {
+                                    List<JObject> fileContentQueryResults = Fetch.PrepareFileContentQueryResults(fileContentQueryResponse);
+                                    await APIClient.SendItAsync(fileContentQueryResults);
+                                }
+                            }
+                            else if (!string.IsNullOrEmpty(options.SmsProvider) || !string.IsNullOrEmpty(options.SiteCode) || !string.IsNullOrEmpty(options.CollectionId))
+                            {
+                                if (string.IsNullOrEmpty(options.SmsProvider)) Console.WriteLine("[!] SmsProvider was not specified");
+                                if (string.IsNullOrEmpty(options.SiteCode)) Console.WriteLine("[!] SiteCode was not specified");
+                                if (string.IsNullOrEmpty(options.CollectionId)) Console.WriteLine("[!] SccmCollectionId was not specified");
+                                Console.WriteLine("[!] Skipping SCCM cmpivot collection");
                             }
                         }
-                        else if (!string.IsNullOrEmpty(options.SmsProvider) || !string.IsNullOrEmpty(options.SiteCode) || !string.IsNullOrEmpty(options.CollectionId))
-                        {
-                            if (string.IsNullOrEmpty(options.SmsProvider)) Console.WriteLine("[!] SmsProvider was not specified");
-                            if (string.IsNullOrEmpty(options.SiteCode)) Console.WriteLine("[!] SiteCode was not specified");
-                            if (string.IsNullOrEmpty(options.CollectionId)) Console.WriteLine("[!] SccmCollectionId was not specified");
-                            Console.WriteLine("[!] Skipping SCCM cmpivot collection");
-                        }
-                    }
 
-                    else if (!string.IsNullOrEmpty(options.Fetch))
-                    {
-                        // SMB share collection
-                        if (options.Fetch == "dir")
+                        // Collection from a local or remote directory
+                        else if (options.Fetch == "dir")
                         {
                             string uncPattern = @"^\\\\[\w\d.-]+\\[\w\d.-]+(\\)?";
+                            string localDirPattern = @"^[a-zA-Z]:\\";
+
                             if (!string.IsNullOrEmpty(options.FetchResultsDir))
                             {
-                                // Use this collection method automatically if --fetchresultsfile is a UNC path
-                                if (Regex.IsMatch(options.FetchResultsDir, uncPattern))
-                                {
-                                    List<JObject> fetchResults = await Fetch.GetFetchResultsFromShare(options.FetchResultsDir, options.LookbackDays);
+                                bool isValidPath = Regex.IsMatch(options.FetchResultsDir, uncPattern) ||
+                                                   Regex.IsMatch(options.FetchResultsDir, localDirPattern) ||
+                                                   Directory.Exists(options.FetchResultsDir);
 
-                                    if (fetchResults != null)
+                                if (isValidPath)
+                                {
+                                    try
                                     {
-                                        await APIClient.SendItAsync(fetchResults);
+                                        List<JObject> fetchResults = await Fetch.GetFetchResultsFromDir(options.FetchResultsDir, options.LookbackDays);
+                                        if (fetchResults != null && fetchResults.Any())
+                                        {
+                                            logger.LogInformation($"Found {fetchResults.Count} FETCH results in {options.FetchResultsDir}");
+                                            await APIClient.SendItAsync(fetchResults);
+                                            logger.LogInformation($"Successfully processed and sent {fetchResults.Count} FETCH results from {options.FetchResultsDir}");
+                                        }
+                                        else
+                                        {
+                                            logger.LogWarning($"No FETCH data found in the specified directory ({options.FetchResultsDir})");
+                                        }
                                     }
-                                    else
+                                    catch (Exception ex)
                                     {
-                                        logger.LogError($"The remote share ({options.FetchResultsDir}) did not respond with FETCH data");
+                                        logger.LogError($"Error processing FETCH data from {options.FetchResultsDir}: {ex.Message}");
                                     }
+                                }
+                                else
+                                {
+                                    logger.LogError($"Invalid path specified for FetchResultsDir: {options.FetchResultsDir}");
                                 }
                             }
                         }

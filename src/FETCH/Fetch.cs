@@ -237,32 +237,42 @@ namespace Sharphound
             return fileContentResults;
         }
 
-        public static async Task<List<JObject>> GetFetchResultsFromShare(string remoteDirectory, int lookbackDays)
+        public static async Task<List<JObject>> GetFetchResultsFromDir(string remoteDirectory, int lookbackDays)
         {
             List<JObject> fetchResults = new List<JObject>();
             try
             {
                 if (Directory.Exists(remoteDirectory))
                 {
-                    foreach (string dir in Directory.EnumerateDirectories(remoteDirectory))
-                    {
-                        string dirName = new DirectoryInfo(dir).Name;
+                    DateTime cutoffDate = DateTime.UtcNow.AddDays(-lookbackDays);
 
-                        // Parse directory name into date
-                        if (DateTime.TryParseExact(dirName, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime dirDate))
+                    foreach (string filePath in Directory.EnumerateFiles(remoteDirectory, "FetchResults*.json"))
+                    {
+                        string fileName = Path.GetFileName(filePath);
+                        // Extract date part from filename
+                        Match match = Regex.Match(fileName, @"_(\d{8})-\d{6}-UTC\.json$");
+
+                        if (match.Success)
                         {
-                            // Check if this date is within the lookback period
-                            if (dirDate >= DateTime.Today.AddDays(-lookbackDays))
+                            string dateString = match.Groups[1].Value;
+                            if (DateTime.TryParseExact(dateString, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime fileDate))
                             {
-                                // Enumerate JSON files in this directory
-                                foreach (string filePath in Directory.EnumerateFiles(dir, "*.json"))
+                                // Check if this date is within the lookback period
+                                if (fileDate >= cutoffDate)
                                 {
-                                    // Read and deserialize JSON file
-                                    using (StreamReader sr = new StreamReader(filePath))
+                                    try
                                     {
-                                        string jsonText = await sr.ReadToEndAsync();
-                                        JObject jsonObj = JObject.Parse(jsonText);
-                                        fetchResults.Add(jsonObj);
+                                        // Read and deserialize JSON file
+                                        using (StreamReader sr = new StreamReader(filePath))
+                                        {
+                                            string jsonText = await sr.ReadToEndAsync();
+                                            JObject jsonObj = JObject.Parse(jsonText);
+                                            fetchResults.Add(jsonObj);
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"[!] Error processing file {fileName}: {ex.Message}");
                                     }
                                 }
                             }
