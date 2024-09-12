@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Channels;
@@ -131,6 +132,11 @@ namespace Sharphound.Runtime {
             if ((_methods & CollectionMethod.ACL) != 0) {
                 var aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry)
                     .ToArrayAsync(cancellationToken: _cancellationToken);
+                var ownerAce = aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 var gmsa = entry.GetByteProperty(LDAPProperties.GroupMSAMembership);
                 ret.Aces = aces.Concat(await _aclProcessor.ProcessGMSAReaders(gmsa, resolvedSearchResult.Domain)
                     .ToArrayAsync(cancellationToken: _cancellationToken)).ToArray();
@@ -186,6 +192,11 @@ namespace Sharphound.Runtime {
 
             if ((_methods & CollectionMethod.ACL) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArrayAsync(_cancellationToken);
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
@@ -318,6 +329,11 @@ namespace Sharphound.Runtime {
 
             if ((_methods & CollectionMethod.ACL) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArrayAsync(cancellationToken: _cancellationToken);
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
@@ -360,6 +376,11 @@ namespace Sharphound.Runtime {
 
             if ((_methods & CollectionMethod.ACL) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArrayAsync();
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
                 ret.InheritanceHashes = _aclProcessor.GetInheritedAceHashes(entry, resolvedSearchResult).ToArray();
@@ -398,6 +419,11 @@ namespace Sharphound.Runtime {
 
             if ((_methods & CollectionMethod.ACL) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArrayAsync();
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
@@ -423,6 +449,11 @@ namespace Sharphound.Runtime {
 
             if ((_methods & CollectionMethod.ACL) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArrayAsync();
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
                 ret.InheritanceHashes = _aclProcessor.GetInheritedAceHashes(entry, resolvedSearchResult).ToArray();
@@ -470,6 +501,11 @@ namespace Sharphound.Runtime {
             if ((_methods & CollectionMethod.ACL) != 0 || (_methods & CollectionMethod.CertServices) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry)
                     .ToArrayAsync();
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
                 ret.InheritanceHashes = _aclProcessor.GetInheritedAceHashes(entry, resolvedSearchResult).ToArray();
@@ -499,6 +535,11 @@ namespace Sharphound.Runtime {
 
             if ((_methods & CollectionMethod.ACL) != 0 || (_methods & CollectionMethod.CertServices) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArrayAsync();
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
@@ -526,6 +567,11 @@ namespace Sharphound.Runtime {
 
             if ((_methods & CollectionMethod.ACL) != 0 || (_methods & CollectionMethod.CertServices) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArrayAsync();
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
@@ -554,6 +600,11 @@ namespace Sharphound.Runtime {
 
             if ((_methods & CollectionMethod.ACL) != 0 || (_methods & CollectionMethod.CertServices) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArrayAsync();
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
@@ -632,6 +683,11 @@ namespace Sharphound.Runtime {
 
             if ((_methods & CollectionMethod.ACL) != 0 || (_methods & CollectionMethod.CertServices) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArrayAsync();
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
@@ -667,6 +723,11 @@ namespace Sharphound.Runtime {
 
             if ((_methods & CollectionMethod.ACL) != 0 || (_methods & CollectionMethod.CertServices) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArrayAsync();
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
@@ -695,6 +756,11 @@ namespace Sharphound.Runtime {
 
             if ((_methods & CollectionMethod.ACL) != 0 || (_methods & CollectionMethod.CertServices) != 0) {
                 ret.Aces = await _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArrayAsync();
+                var ownerAce = ret.Aces.FirstOrDefault(ace => ace.RightName == EdgeNames.Owns);
+                if (ownerAce != null)
+                {
+                    ret.Owner = ownerAce.PrincipalSID;
+                }
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
                 ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
