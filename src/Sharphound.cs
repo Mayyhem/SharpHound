@@ -497,7 +497,50 @@ namespace Sharphound
                     {
                         if (options.Fetch == "adminservice")
                         {
-                            // Not yet implemented
+                            if (!string.IsNullOrEmpty(options.SmsProvider) && !string.IsNullOrEmpty(options.SiteCode))
+                            {
+                                string sessionsQuery = $"{options.EntityPrefix}Sessions";
+                                string userRightsQuery = $"{options.EntityPrefix}UserRights";
+                                string localGroupsQuery = $"{options.EntityPrefix}LocalGroups";
+
+                                JObject sessionsQueryResponse = await Fetch.QuerySccmAdminService(sessionsQuery, options.SmsProvider, options.SiteCode, options.CollectionId, options.FetchTimeout);
+                                //JObject userRightsQueryResponse = await Fetch.QuerySccmAdminService(userRightsQuery, options.SmsProvider, options.SiteCode, options.CollectionId, options.FetchTimeout);
+                                //JObject localGroupsQueryResponse = await Fetch.QuerySccmAdminService(localGroupsQuery, options.SmsProvider, options.SiteCode, options.CollectionId, options.FetchTimeout);
+
+                                List<FetchQueryResult> sessionsProcessed = Fetch.ProcessCMPivotResults(sessionsQueryResponse);
+                                string getFQDN = "Registry('HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters')\r\n| where Property == 'Hostname' or Property == 'Domain'\r\n| summarize Hostname = max(case(Property == 'Hostname', Value, '')), \r\n            Domain = max(case(Property == 'Domain', Value, '')) \r\n  by Device\r\n| project Device, FQDN = strcat(Hostname, '.', Domain), Hostname, Domain";
+                                //List<SiteDatabaseQueryResult> userRightsProcessed = Fetch.ProcessCMPivotResults(userRightsQueryResponse);
+                                //List<SiteDatabaseQueryResult> localGroupsProcessed = Fetch.ProcessCMPivotResults(localGroupsQueryResponse);
+
+                                // Combine all the results into a single list
+                                List<FetchQueryResult> combinedResults = new List<FetchQueryResult>();
+                                combinedResults.AddRange(sessionsProcessed);
+                                //combinedResults.AddRange(userRightsQueryResults);
+                                //combinedResults.AddRange(localGroupsQueryResults);
+
+                                // Format and chunk the combined results
+                                List<JObject> fetchData = Fetch.FormatAndChunkQueryResults(combinedResults);
+
+                                if (fetchData != null)
+                                {
+                                    foreach (JObject chunk in fetchData)
+                                    {
+                                        // Send computers files to the ingest API in batches of 100 per job
+                                        await APIClient.SendItAsync(fetchData);
+                                    }
+                                }
+                                else
+                                {
+                                    logger.LogError($"The site database ({options.SiteDatabase}) did not respond with FETCH data");
+                                }
+                            }
+                            else if (!string.IsNullOrEmpty(options.SmsProvider) || !string.IsNullOrEmpty(options.SiteCode) || !string.IsNullOrEmpty(options.CollectionId))
+                            {
+                                if (string.IsNullOrEmpty(options.SmsProvider)) Console.WriteLine("[!] SmsProvider was not specified");
+                                if (string.IsNullOrEmpty(options.SiteCode)) Console.WriteLine("[!] SiteCode was not specified");
+                                if (string.IsNullOrEmpty(options.CollectionId)) Console.WriteLine("[!] SccmCollectionId was not specified");
+                                Console.WriteLine("[!] Skipping SCCM cmpivot collection");
+                            }
                         }
 
                         else if (options.Fetch == "wmi")
@@ -511,26 +554,22 @@ namespace Sharphound
                             if (!string.IsNullOrEmpty(options.SiteDatabase) && !string.IsNullOrEmpty(options.SiteCode))
                             {
                                 // Query the site database for sessions, user rights, and local groups
-                                List<SiteDatabaseQueryResult> sessionQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "Sessions", options.LookbackDays);
-                                List<SiteDatabaseQueryResult> userRightsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "UserRights", options.LookbackDays);
-                                List<SiteDatabaseQueryResult> localGroupsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "LocalGroups", options.LookbackDays);
+                                List<FetchQueryResult> sessionsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "Sessions", options.LookbackDays);
+                                List<FetchQueryResult> userRightsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "UserRights", options.LookbackDays);
+                                List<FetchQueryResult> localGroupsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "LocalGroups", options.LookbackDays);
 
                                 // Combine all the results into a single list
-                                List<SiteDatabaseQueryResult> combinedResults = new List<SiteDatabaseQueryResult>();
-                                combinedResults.AddRange(sessionQueryResults);
+                                List<FetchQueryResult> combinedResults = new List<FetchQueryResult>();
+                                combinedResults.AddRange(sessionsQueryResults);
                                 combinedResults.AddRange(userRightsQueryResults);
                                 combinedResults.AddRange(localGroupsQueryResults);
 
-                                // Format and chunk the combined results
                                 List<JObject> fetchData = Fetch.FormatAndChunkQueryResults(combinedResults);
 
                                 if (fetchData != null)
                                 {
-                                    foreach (JObject chunk in fetchData)
-                                    {
-                                        // Send computers files to the ingest API in batches of 100 per job
-                                        await APIClient.SendItAsync(fetchData);
-                                    }
+                                    // Send computers files to the ingest API in batches of 100
+                                    await APIClient.SendItAsync(fetchData);
                                 }
                                 else
                                 {

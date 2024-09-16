@@ -130,13 +130,13 @@ namespace Sharphound
         public bool CollectAllProperties { get; set; }
 
         // FETCH Options
-        [Option(HelpText = "Use FETCH to aggregate and upload previously collected data. Options: 'wmi', 'mssql', 'cmpivot', 'dir'")]
+        [Option(HelpText = "Use FETCH to aggregate and upload previously collected data. Options: 'adminservice', 'wmi', 'mssql', 'cmpivot', 'dir'")]
         public string Fetch { get; set; }
 
         [Option(HelpText = "Number of days behind to collect FETCH results", Default = 7)]
         public int LookbackDays { get; set; }
 
-        // FETCH cmpivot / mssql
+        // FETCH cmpivot / mssql / adminservice
         [Option(HelpText = "Specify an SCCM (ConfigMgr) site code for collection")]
         public string SiteCode { get; set; }
 
@@ -144,15 +144,15 @@ namespace Sharphound
         [Option(HelpText = "Path to directory containing FETCH results", Default = "%SystemRoot%\\CCM\\ScriptStore\\")]
         public string FetchResultsDir { get; set; }
 
-        // FETCH cmpivot
+        // FETCH cmpivot / adminservice
         [Option(HelpText = "Timeout for SCCM to collect FETCH results in minutes", Default = 0)]
         public int FetchTimeout { get; set; }
 
-        [Option(HelpText = "Specify an SCCM (ConfigMgr) collection ID to retrieve FETCH results from")]
-        public string CollectionId { get; set; }
-
         [Option(HelpText = "Specify an SCCM (ConfigMgr) SMS Provider for collection")]
         public string SmsProvider { get; set; }
+
+        [Option(HelpText = "Specify an SCCM (ConfigMgr) collection ID to retrieve FETCH results from")]
+        public string CollectionId { get; set; }
 
         // FETCH mssql
         [Option(HelpText = "Specify an SCCM (ConfigMgr) site database for collection")]
@@ -160,6 +160,11 @@ namespace Sharphound
 
         [Option(HelpText = "Specify the table name prefix", Default = "SpecterOps_BloodHound_")]
         public string TablePrefix { get; set; }
+
+        // FETCH adminservice
+
+        [Option(HelpText = "Specify the entity name prefix", Default = "BloodHound")]
+        public string EntityPrefix { get; set; }
 
 
 

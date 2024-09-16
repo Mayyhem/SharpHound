@@ -361,9 +361,9 @@ namespace Sharphound
             return null;
         }
 
-        public static async Task<List<SiteDatabaseQueryResult>> QuerySiteDatabase(string siteDatabaseFqdn, string siteCode, string tablePrefix, string collectionType, int lookbackDays)
+        public static async Task<List<FetchQueryResult>> QuerySiteDatabase(string siteDatabaseFqdn, string siteCode, string tablePrefix, string collectionType, int lookbackDays)
         {
-            List<SiteDatabaseQueryResult> results = new List<SiteDatabaseQueryResult>();
+            List<FetchQueryResult> results = new List<FetchQueryResult>();
 
             string connectionString = $"Server={siteDatabaseFqdn};Database=CM_{siteCode};Integrated Security=True;";
 
@@ -426,7 +426,7 @@ namespace Sharphound
                         {
                             while (await reader.ReadAsync())
                             {
-                                var result = new SiteDatabaseQueryResult
+                                var result = new FetchQueryResult
                                 {
                                     CollectedComputerMachineID = reader["MachineID"].ToString(),
                                     CollectionDatetime = Convert.ToDateTime(reader["CollectionDatetime00"]),
@@ -458,176 +458,236 @@ namespace Sharphound
             return results;
         }
 
-    public static JObject FormatQueryResults(List<SiteDatabaseQueryResult> results)
-    {
-        // Group results by ComputerSID to process each computer's data together
-        var groupedResults = results.GroupBy(r => r.CollectedComputerSID);
-
-        var formattedResults = new JObject
+        public static List<FetchQueryResult> ProcessCMPivotResults(JObject cmPivotResult)
         {
-            ["meta"] = new JObject
+            var processedResults = new List<FetchQueryResult>();
+
+            // Extract the "value" array from the JObject
+            var value = cmPivotResult["value"] as JArray;
+            if (value == null) return null;
+
+            // Iterate through each item in the "value" array
+            foreach (var item in value)
             {
-                ["count"] = groupedResults.Count(),
-                ["type"] = "computers",
-                ["version"] = 5,
-                ["methods"] = 107028
-            },
-            ["data"] = new JArray(groupedResults.Select(group => FormatComputerData(group.Key, group)))
-        };
+                // Extract the "Result" array from each item
+                var result = item["Result"] as JArray;
+                if (result == null) continue;
 
-        return formattedResults;
-    }
-
-    private static JObject FormatComputerData(string objectIdentifier, IEnumerable<SiteDatabaseQueryResult> computerResults)
-    {
-        var firstResult = computerResults.First();
-        var computerData = new JObject
-        {
-            ["ObjectIdentifier"] = objectIdentifier,
-            ["Properties"] = new JObject
-            {
-                ["name"] = $"{firstResult.CollectedComputerNetbiosName}.{firstResult.CollectedComputerFullDomainName}"
-            }
-        };
-
-        // Dictionary to store the most recent session for each unique UserSID and ComputerSID combination
-        // Key: (UserSID, ComputerSID), Value: (LastSeen as DateTime, LastSeen as string)
-        var sessionDict = new Dictionary<(string, string), (DateTime, string)>();
-
-        // Dictionary to store unique UserRights
-        // Key: Privilege, Value: Set of (ObjectIdentifier, ObjectType) tuples
-        var userRights = new Dictionary<string, HashSet<(string, string)>>();
-
-        // Dictionary to store LocalGroups
-        // Key: GroupSID, Value: JObject representing the group
-        var localGroups = new Dictionary<string, JObject>();
-
-        foreach (var result in computerResults)
-        {
-            if (result.CollectionData.ContainsKey("UserSID00"))
-            {
-                // Process Session data
-                var userSID = result.CollectionData["UserSID00"];
-                var computerSID = result.CollectionData["ComputerSID00"];
-                var lastSeenString = result.CollectionData["LastSeen00"];
-
-
-                // Parse the LastSeen string to DateTime for accurate comparison
-                var lastSeen = new DateTime();
-                DateTime.TryParseExact(lastSeenString, "M/d/yyyy h:mm:ss tt",
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out lastSeen);
-
-                // Format the LastSeen back to the desired output format
-                var formattedLastSeen = lastSeen.ToString("yyyy-MM-dd HH:mm UTC");
-
-                var key = (userSID, computerSID);
-
-                // Update the dictionary if this is a new or more recent session
-                if (!sessionDict.ContainsKey(key) || lastSeen > sessionDict[key].Item1)
+                // Process each entry in the "Result" array
+                foreach (var entry in result)
                 {
-                    sessionDict[key] = (lastSeen, formattedLastSeen);
+                    // Extract CollectionDatetime and Device from the entry
+                    var collectionDatetime = entry["CollectionDatetime"].ToString();
+                    var device = entry["Device"].ToString();
+
+                    // Check if a SiteDatabaseQueryResult already exists for this device and datetime
+                    var existingResult = processedResults.FirstOrDefault(r =>
+                        r.CollectedComputerNetbiosName == device &&
+                        r.CollectionDatetime == DateTime.Parse(collectionDatetime));
+
+                    // If no existing result, create a new SiteDatabaseQueryResult
+                    if (existingResult == null)
+                    {
+                        existingResult = new FetchQueryResult
+                        {
+                            CollectedComputerNetbiosName = device,
+                            CollectionDatetime = DateTime.Parse(collectionDatetime),
+                            CollectionData = new Dictionary<string, string>()
+                        };
+                        processedResults.Add(existingResult);
+                    }
+
+                    // Populate the CollectionData dictionary with all properties
+                    // except CollectionDatetime and Device
+                    foreach (var property in entry.Children<JProperty>())
+                    {
+                        if (property.Name != "CollectionDatetime" && property.Name != "Device")
+                        {
+                            existingResult.CollectionData[property.Name] = property.Value.ToString();
+                        }
+                    }
                 }
             }
+            return processedResults;
+        }
+
+
+        public static JObject FormatQueryResults(List<FetchQueryResult> results)
+        {
+            var formattedResults = new JObject();
+
+            // Group results by ComputerSID to process each computer's data together
+            var groupedResults = results.GroupBy(r => r.CollectedComputerSID);
             
-            else if (result.CollectionData.ContainsKey("Privilege00"))
+            // Only ingest results with one or more computers
+            if (groupedResults.Count() > 0)
             {
-                // Process UserRights data
-                var privilege = result.CollectionData["Privilege00"];
-                var rightObjectIdentifier = result.CollectionData["ObjectIdentifier00"];
-                var objectType = result.CollectionData["ObjectType00"];
-
-                if (!userRights.ContainsKey(privilege))
+                formattedResults = new JObject
                 {
-                    userRights[privilege] = new HashSet<(string, string)>();
-                }
-                userRights[privilege].Add((rightObjectIdentifier, objectType));
+                    ["meta"] = new JObject
+                    {
+                        ["count"] = groupedResults.Count(),
+                        ["type"] = "computers",
+                        ["version"] = 5,
+                        ["methods"] = 107028
+                    },
+                    ["data"] = new JArray(groupedResults.Select(group => FormatComputerData(group.Key, group)))
+                };
             }
 
-            else if (result.CollectionData.ContainsKey("GroupName00"))
-            {
-                // Process LocalGroups data
-                var groupName = result.CollectionData["GroupName00"];
-                var groupSID = result.CollectionData["GroupSID00"];
-                var memberSID = result.CollectionData["MemberSID00"];
-                var memberType = result.CollectionData["MemberType00"];
-
-                if (!localGroups.ContainsKey(groupSID))
-                {
-                    // Create a new group if it doesn't exist
-                    localGroups[groupSID] = new JObject
-                    {
-                        ["LocalNames"] = new JArray(),
-                        ["Name"] = groupName,
-                        ["Collected"] = true,
-                        ["FailureReason"] = null,
-                        ["Results"] = new JArray(),
-                        ["ObjectIdentifier"] = groupSID
-                    };
-                }
-
-                var results = (JArray)localGroups[groupSID]["Results"];
-
-                // Add the member to the group if it's not already there
-                if (!results.Any(r => (string)r["ObjectIdentifier"] == memberSID))
-                {
-                    results.Add(new JObject
-                    {
-                        ["ObjectIdentifier"] = memberSID,
-                        ["ObjectType"] = memberType
-                    });
-                }
-            }
+            return formattedResults;
         }
 
-        // Add Sessions to the computer data if any exist
-        if (sessionDict.Count > 0)
+        private static JObject FormatComputerData(string objectIdentifier, IEnumerable<FetchQueryResult> computerResults)
         {
-            computerData["Sessions"] = new JObject
+            var firstResult = computerResults.First();
+            var computerData = new JObject
             {
-                ["Collected"] = true,
-                ["FailureReason"] = null,
-                ["Results"] = new JArray(sessionDict.Select(kvp => new JObject
+                ["ObjectIdentifier"] = objectIdentifier,
+                ["Properties"] = new JObject
                 {
-                    ["UserSID"] = kvp.Key.Item1,
-                    ["LastSeen"] = kvp.Value.Item2,
-                    ["ComputerSID"] = kvp.Key.Item2
-                }))
+                    ["name"] = $"{firstResult.CollectedComputerNetbiosName}.{firstResult.CollectedComputerFullDomainName}"
+                }
             };
-        }
 
-        // Add UserRights to the computer data if any exist
-        if (userRights.Count > 0)
-        {
-            computerData["UserRights"] = new JArray(userRights.Select(kvp => new JObject
+            // Dictionary to store the most recent session for each unique UserSID and ComputerSID combination
+            // Key: (UserSID, ComputerSID), Value: (LastSeen as DateTime, LastSeen as string)
+            var sessionDict = new Dictionary<(string, string), (DateTime, string)>();
+
+            // Dictionary to store unique UserRights
+            // Key: Privilege, Value: Set of (ObjectIdentifier, ObjectType) tuples
+            var userRights = new Dictionary<string, HashSet<(string, string)>>();
+
+            // Dictionary to store LocalGroups
+            // Key: GroupSID, Value: JObject representing the group
+            var localGroups = new Dictionary<string, JObject>();
+
+            foreach (var result in computerResults)
             {
-                ["LocalNames"] = new JArray(),
-                ["Collected"] = true,
-                ["FailureReason"] = null,
-                ["Privilege"] = kvp.Key,
-                ["Results"] = new JArray(kvp.Value.Select(v => new JObject
+                if (result.CollectionData.ContainsKey("UserSID00"))
                 {
-                    ["ObjectIdentifier"] = v.Item1,
-                    ["ObjectType"] = v.Item2
-                }))
-            }));
+                    // Process Session data
+                    var userSID = result.CollectionData["UserSID00"];
+                    var computerSID = result.CollectionData["ComputerSID00"];
+                    var lastSeenString = result.CollectionData["LastSeen00"];
+
+
+                    // Parse the LastSeen string to DateTime for accurate comparison
+                    var lastSeen = new DateTime();
+                    DateTime.TryParseExact(lastSeenString, "M/d/yyyy h:mm:ss tt",
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out lastSeen);
+
+                    // Format the LastSeen back to the desired output format
+                    var formattedLastSeen = lastSeen.ToString("yyyy-MM-dd HH:mm UTC");
+
+                    var key = (userSID, computerSID);
+
+                    // Update the dictionary if this is a new or more recent session
+                    if (!sessionDict.ContainsKey(key) || lastSeen > sessionDict[key].Item1)
+                    {
+                        sessionDict[key] = (lastSeen, formattedLastSeen);
+                    }
+                }
+            
+                else if (result.CollectionData.ContainsKey("Privilege00"))
+                {
+                    // Process UserRights data
+                    var privilege = result.CollectionData["Privilege00"];
+                    var rightObjectIdentifier = result.CollectionData["ObjectIdentifier00"];
+                    var objectType = result.CollectionData["ObjectType00"];
+
+                    if (!userRights.ContainsKey(privilege))
+                    {
+                        userRights[privilege] = new HashSet<(string, string)>();
+                    }
+                    userRights[privilege].Add((rightObjectIdentifier, objectType));
+                }
+
+                else if (result.CollectionData.ContainsKey("GroupName00"))
+                {
+                    // Process LocalGroups data
+                    var groupName = result.CollectionData["GroupName00"];
+                    var groupSID = result.CollectionData["GroupSID00"];
+                    var memberSID = result.CollectionData["MemberSID00"];
+                    var memberType = result.CollectionData["MemberType00"];
+
+                    if (!localGroups.ContainsKey(groupSID))
+                    {
+                        // Create a new group if it doesn't exist
+                        localGroups[groupSID] = new JObject
+                        {
+                            ["LocalNames"] = new JArray(),
+                            ["Name"] = groupName,
+                            ["Collected"] = true,
+                            ["FailureReason"] = null,
+                            ["Results"] = new JArray(),
+                            ["ObjectIdentifier"] = groupSID
+                        };
+                    }
+
+                    var results = (JArray)localGroups[groupSID]["Results"];
+
+                    // Add the member to the group if it's not already there
+                    if (!results.Any(r => (string)r["ObjectIdentifier"] == memberSID))
+                    {
+                        results.Add(new JObject
+                        {
+                            ["ObjectIdentifier"] = memberSID,
+                            ["ObjectType"] = memberType
+                        });
+                    }
+                }
+            }
+
+            // Add Sessions to the computer data if any exist
+            if (sessionDict.Count > 0)
+            {
+                computerData["Sessions"] = new JObject
+                {
+                    ["Collected"] = true,
+                    ["FailureReason"] = null,
+                    ["Results"] = new JArray(sessionDict.Select(kvp => new JObject
+                    {
+                        ["UserSID"] = kvp.Key.Item1,
+                        ["LastSeen"] = kvp.Value.Item2,
+                        ["ComputerSID"] = kvp.Key.Item2
+                    }))
+                };
+            }
+
+            // Add UserRights to the computer data if any exist
+            if (userRights.Count > 0)
+            {
+                computerData["UserRights"] = new JArray(userRights.Select(kvp => new JObject
+                {
+                    ["LocalNames"] = new JArray(),
+                    ["Collected"] = true,
+                    ["FailureReason"] = null,
+                    ["Privilege"] = kvp.Key,
+                    ["Results"] = new JArray(kvp.Value.Select(v => new JObject
+                    {
+                        ["ObjectIdentifier"] = v.Item1,
+                        ["ObjectType"] = v.Item2
+                    }))
+                }));
+            }
+
+            // Add LocalGroups to the computer data if any exist
+            if (localGroups.Count > 0)
+            {
+                computerData["LocalGroups"] = new JArray(localGroups.Values);
+            }
+
+            return computerData;
         }
 
-        // Add LocalGroups to the computer data if any exist
-        if (localGroups.Count > 0)
-        {
-            computerData["LocalGroups"] = new JArray(localGroups.Values);
-        }
-
-        return computerData;
-    }
-
-    public static List<JObject> FormatAndChunkQueryResults(List<SiteDatabaseQueryResult> results, int chunkSize = 100)
+        public static List<JObject> FormatAndChunkQueryResults(List<FetchQueryResult> results, int chunkSize = 100)
         {
             var formattedResults = FormatQueryResults(results);
             var dataArray = (JArray)formattedResults["data"];
 
-            // If there are 100 or fewer computers, return the original result in a list
+            // If there are chunkSize or fewer items, return the original result in a list
             if (dataArray.Count <= chunkSize)
             {
                 return new List<JObject> { formattedResults };
@@ -638,14 +698,14 @@ namespace Sharphound
             for (int i = 0; i < dataArray.Count; i += chunkSize)
             {
                 var chunkArray = new JArray(dataArray.Skip(i).Take(chunkSize));
-                var chunkObject = new JObject
-                {
-                    ["meta"] = new JObject(formattedResults["meta"]),
-                    ["data"] = chunkArray
-                };
+                var chunkObject = new JObject();
+
+                // Copy the meta object instead of creating a new one with the original as content
+                chunkObject["meta"] = formattedResults["meta"].DeepClone();
+                chunkObject["data"] = chunkArray;
 
                 // Update the count in the meta object for this chunk
-                chunkObject["meta"]["count"] = chunkArray.Count;
+                ((JObject)chunkObject["meta"])["count"] = chunkArray.Count;
 
                 chunks.Add(chunkObject);
             }

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Sharphound
 {
-    public class SiteDatabaseQueryResult
+    public class FetchQueryResult
     {
         public string CollectedComputerMachineID { get; set; }
         public DateTime CollectionDatetime { get; set; }
