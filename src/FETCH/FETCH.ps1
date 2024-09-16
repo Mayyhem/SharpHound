@@ -506,36 +506,58 @@ try {
             "ComputerSID" = "string"
         }
         Add-WmiClass -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType "Sessions" -KeyProperty $keyProp -Properties $props
+        $existingSessions = Get-WmiObject -Namespace $WmiNamespace -Class $WmiClassPrefix`Sessions
     }
 
     # Function to add or update a session in $collectedSessions
     function AddOrUpdateSessions([ref]$collectedSessions, $newSession) {
 
-        # Check if a session with the same UserSID and ComputerSID already exists
-        $existingSession = $collectedSessions.Value | Where-Object { $_.UserSID -eq $newSession.UserSID -and $_.ComputerSID -eq $newSession.ComputerSID }
+        $collectedSession = $collectedSessions.Value | Where-Object { $_.UserSID -eq $newSession.UserSID -and $_.ComputerSID -eq $newSession.ComputerSID }
+        $existingSession = $existingSessions | Where-Object { $_.UserSID -eq $newSession.UserSID -and $_.ComputerSID -eq $newSession.ComputerSID }
 
-        if ($existingSession) {
-
-            Write-Log "VERBOSE" "Duplicate session found for $($newSession.UserSID)"
+        # Check if a session with the same UserSID and ComputerSID was already collected by the script
+        if ($collectedSession) {
+            Write-Log "VERBOSE" "Duplicate session found in collected data for $($newSession.UserSID) on $($newSession.ComputerSID)"
             # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
-            if ($newSession.LastSeen -gt $existingSession.LastSeen) {
-                $existingSession.LastSeen = $newSession.LastSeen
+            if ($newSession.LastSeen -gt $collectedSession.LastSeen) {
+                $collectedSession.LastSeen = $newSession.LastSeen
                 Write-Log "VERBOSE" "Keeping most recent session last seen at $($newSession.LastSeen)"
+                $collectedSessions.Value += $newSession
             } else {
-                Write-Log "VERBOSE" "Keeping most recent session last seen at $($existingSession.LastSeen)"
+                Write-Log "VERBOSE" "Keeping most recent session last seen at $($collectedSession.LastSeen)"
             }
-            Write-DebugVar existingSession
+            Write-DebugVar collectedSession
 
         } else {
-
-            Write-Log "VERBOSE" "Found new session for $($newSession.UserSID) at $($newSession.LastSeen)"
-            # If no session with the same UserSID and ComputerSID is found, add the session to the script output
-            $collectedSessions.Value += $newSession
-            Write-DebugVar newSession
+            Write-Log "VERBOSE" "Found session for $($newSession.UserSID) on $($newSession.ComputerSID) at $($newSession.LastSeen)"
 
             if ($Wmi) {
-                Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType 'Sessions' -Properties $newSession
-            }
+
+                # Check if a session with the same UserSID and ComputerSID already exists in WMI
+                if ($existingSession) {
+                    Write-Log "VERBOSE" "Duplicate session found in WMI for $($newSession.UserSID) on $($newSession.ComputerSID)"
+                    
+                    # Ensure LastSeen formats match
+                    $newSessionWmiTimestamp = ([DateTime]::ParseExact($newSession.LastSeen, "yyyy-MM-dd HH:mm 'UTC'", [System.Globalization.CultureInfo]::InvariantCulture)).ToString("yyyyMMddHHmmss.ffffff+000")
+
+                    # If a session with the same UserSID and ComputerSID is found, compare LastSeen times and update if the new one is more recent
+                    if ($newSessionWmiTimestamp -gt $existingSession.LastSeen) {
+                        Write-Log "VERBOSE" "Keeping most recent session last seen at $($newSession.LastSeen)"
+                        $existingSession.Delete()
+                        Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType 'Sessions' -Properties $newSession
+                    } else {
+                        Write-Log "VERBOSE" "Keeping most recent session last seen at $($existingSession.LastSeen)"
+                    }
+                    Write-DebugVar existingSession
+
+                } else {
+                    Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType 'Sessions' -Properties $newSession
+                }
+            } 
+
+            # Add the session to the script output
+            $collectedSessions.Value += $newSession
+            Write-DebugVar newSession
         }
     }
 
@@ -634,6 +656,7 @@ try {
             "ObjectType" = "string"
         }
         Add-WmiClass -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType "UserRights" -KeyProperty $keyProp -Properties $props
+        $existingRights = Get-WmiObject -Namespace $WmiNamespace -Class $WmiClassPrefix`UserRights
     }
 
     # Export the security configuration to a file, discarding non-terminating errors to prevent stdout pollution
@@ -678,7 +701,6 @@ try {
         foreach ($sid in $sids) {
             $objectIdentifier = $sid.ObjectIdentifier
             $objectType = $sid.ObjectType
-            Write-Log "VERBOSE" "Found $right privilege for $objectType $objectIdentifier)"
 
             if ($Wmi) {
                 $userRightsAssignment = @{
@@ -686,10 +708,24 @@ try {
                     "ObjectIdentifier" = $objectIdentifier
                     "ObjectType" = $objectType
                 }
-            Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType 'UserRights' -Properties $userRightsAssignment
+
+                # Check if a user rights assignment with the same permission and user SID already exists
+                $matchingRight = $existingRights | Where-Object { $_.Privilege -eq $userRightsAssignment.Privilege -and $_.ObjectIdentifier -eq $userRightsAssignment.ObjectIdentifier }
+                
+                if ($matchingRight) {
+                    Write-Log "VERBOSE" "Skipping duplicate user rights assignment found for $($userRightsAssignment.ObjectIdentifier): $($userRightsAssignment.Privilege)"
+                    
+                } else {
+                    Write-Log "VERBOSE" "Found new user rights assignment for $($userRightsAssignment.ObjectIdentifier): $($userRightsAssignment.Privilege)"
+
+                    if ($Wmi) {
+                        Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType 'UserRights' -Properties $userRightsAssignment
+                    }
+                }
             }
         }
-        
+
+        # Add each user rights assignment to script output
         $userRights += $userRight
         Write-DebugVar userRight
     }
@@ -717,6 +753,7 @@ try {
             "MemberSID" = "string"
         }
         Add-WmiClass -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType "LocalGroups" -KeyProperty $keyProp -Properties $props
+        $existingGroupMembers = Get-WmiObject -Namespace $WmiNamespace -Class $WmiClassPrefix`LocalGroups
     }
 
     $currentGroup = $null
@@ -851,9 +888,7 @@ try {
                 Write-DebugVar result
 
                 if ($result) {
-
-                    Write-Log "VERBOSE" "Found $memberType $memberSID in $($currentGroup.Name) ($($currentGroup.ObjectIdentifier))"
-                   
+                
                     $currentGroup["Results"] += $result
                     Write-DebugVar currentGroup
 
@@ -864,12 +899,26 @@ try {
                             "MemberType" = $memberType
                             "MemberSID" = $memberSID
                         }
-                        Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType 'LocalGroups' -Properties $localGroupMember
+
+                        # Check if a group member with the same user SID already exists
+                        $matchingGroupMember = $existingGroupMembers | Where-Object { $_.GroupSID -eq $localGroupMember.GroupSID -and $_.MemberSID -eq $localGroupMember.MemberSID }
+                        
+                        if ($matchingGroupMember) {
+                            Write-Log "VERBOSE" "Skipping duplicate group member: $memberSID in $($currentGroup.Name)"
+                            
+                        } else {
+                            Write-Log "VERBOSE" "Found new $memberType $memberSID in $($currentGroup.Name) ($($currentGroup.ObjectIdentifier))"
+
+                            if ($Wmi) {
+                                Add-WmiClassInstance -WmiNamespace $WmiNamespace -WmiClassPrefix $WmiClassPrefix -CollectionType 'LocalGroups' -Properties $localGroupMember
+                            }
+                        }
                     }
                 } else {
                     Write-Log "VERBOSE" "Skipping $memberType $memberSID in $($currentGroup.Name) ($($currentGroup.ObjectIdentifier))"
                 }
             }
+
             # Add each local group to script output
             $groups += $currentGroup
         }
