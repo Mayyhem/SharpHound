@@ -1007,7 +1007,10 @@ try {
 
     # Write to file if output directory is specified
     if ($OutputDir) {
-        $jsonOutput | Out-File $outputFile
+        # BOM
+        #$jsonOutput | Out-File $outputFile -Encoding utf8
+        # No BOM
+        [System.IO.File]::WriteAllBytes($outputFile, [System.Text.Encoding]::UTF8.GetBytes($jsonOutput))
         Write-Log "INFO" "Results saved to $outputFile"
     }
 
