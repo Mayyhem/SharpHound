@@ -882,6 +882,8 @@ try {
                                 "ObjectIdentifier" = $memberSID
                                 "ObjectType" = $memberType
                             }
+                        } else {
+                            $memberType = "LocalUser"
                         }
                     }
                 }
