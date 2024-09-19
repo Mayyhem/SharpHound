@@ -310,7 +310,7 @@ namespace Sharphound
             return await signedIngestClient.StartJobAsync((int)nextJob["id"]);
         }
 
-        public static async Task SendItAsync(List<JObject> bloodHoundData)
+        public static async Task SendItAsync(List<JObject> bloodHoundDataChunks)
         {
             // Get environment variables from %USERPROFILE%\.env
             LoadEnvVariablesFromFile();
@@ -356,13 +356,13 @@ namespace Sharphound
             await sharpHoundAPIClientSigned.StartJobAsync((int)nextJob["id"]);
 
             // Prepare data
-            int totalPosts = bloodHoundData.Count();
+            int totalPosts = bloodHoundDataChunks.Count();
             int postsLeft = totalPosts;
-            foreach (JObject hostBloodHoundData in bloodHoundData)
+            foreach (JObject chunk in bloodHoundDataChunks)
             {
                 // Send data to ingest
                 postsLeft--;
-                response = await sharpHoundAPIClientSigned.PostIngestAsync(Encoding.UTF8.GetBytes(hostBloodHoundData.ToString(Formatting.None)), totalPosts, totalPosts - postsLeft);
+                response = await sharpHoundAPIClientSigned.PostIngestAsync(Encoding.UTF8.GetBytes(chunk.ToString(Formatting.None)), totalPosts, totalPosts - postsLeft);
 
             }
             // Mark the job as done so the ingest API scoops it up
