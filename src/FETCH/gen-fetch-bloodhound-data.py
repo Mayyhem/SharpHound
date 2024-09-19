@@ -437,7 +437,7 @@ def add_local_group_members(computers, users, groups):
 def add_sessions(computers, users):
     all_objects = users + computers
     for computer in computers:
-        session_count = random.randint(1, 3)
+        session_count = random.randint(0, 2)
         for _ in range(session_count):
             user = random.choice(all_objects)
             computer["Sessions"]["Results"].append({
@@ -502,5 +502,5 @@ def generate_test_data(user_count, computer_count, group_count):
 if __name__ == "__main__":
     user_count = 500
     computer_count = 1000
-    group_count = 50
+    group_count = 25
     generate_test_data(user_count, computer_count, group_count)
