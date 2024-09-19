@@ -687,7 +687,7 @@ namespace Sharphound
             var formattedResults = FormatQueryResults(results);
 
             // Chunk size testing
-            formattedResults = JObject.Parse(File.ReadAllText("../../../src/FETCH/computers.json"));
+            //formattedResults = JObject.Parse(File.ReadAllText("../../../src/FETCH/computers.json"));
 
             var dataArray = (JArray)formattedResults["data"];
 
