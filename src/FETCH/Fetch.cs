@@ -685,6 +685,10 @@ namespace Sharphound
         public static List<JObject> FormatAndChunkQueryResults(List<FetchQueryResult> results, int chunkSize = 100)
         {
             var formattedResults = FormatQueryResults(results);
+
+            // Chunk size testing
+            formattedResults = JObject.Parse(File.ReadAllText("../../../src/FETCH/computers.json"));
+
             var dataArray = (JArray)formattedResults["data"];
 
             // If there are chunkSize or fewer items, return the original result in a list

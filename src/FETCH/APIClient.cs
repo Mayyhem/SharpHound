@@ -108,7 +108,24 @@ namespace Sharphound
 
         private async Task<HttpResponseMessage> SendRequestAsync(HttpRequestMessage request)
         {
-            return await _httpClient.SendAsync(request);
+            HttpResponseMessage response = null;
+            try
+            {
+                response = await _httpClient.SendAsync(request);
+                if (response != null)
+                {
+                    if (response.StatusCode != HttpStatusCode.OK && response.StatusCode != HttpStatusCode.Accepted
+                        && response.StatusCode != HttpStatusCode.Continue)
+                    {
+                        await Console.Out.WriteLineAsync($"[!] Did not receive an OK/Accept/Continue response from the server: {response.StatusCode}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                await Console.Out.WriteLineAsync($"[!] Did not receive a response from the server: {ex.Message}");
+            }
+            return response;
         }
 
         public async Task<JObject> CreateClientAsync(string name, string type = "sharphound", string domainController = "")
@@ -126,7 +143,19 @@ namespace Sharphound
             Console.WriteLine("[*] Creating SharpHound client: " + name);
             var response = await SendRequestAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
-            return JObject.Parse(responseContent);
+            if (responseContent != null)
+            {
+                try
+                {
+                    return JObject.Parse(responseContent);
+                }
+                catch
+                {
+                    await Console.Out.WriteLineAsync("[!] Could not parse JSON from the response:");
+                }
+            }
+            Console.WriteLine(responseContent);
+            return null;
         }
 
         public async Task<HttpResponseMessage> CreateJobAsync(APIClient adminAPIClient, JToken sharpHoundClient)
@@ -159,10 +188,6 @@ namespace Sharphound
             // Send the request
             Console.WriteLine("[*] Creating job for SharpHound client");
             HttpResponseMessage response = await adminAPIClient.SendRequestAsync(request);
-
-            // Output the response
-            Console.WriteLine($"[*] Response: {response}");
-
             return response;
         }
 
@@ -187,8 +212,18 @@ namespace Sharphound
 
             var response = await SendRequestAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
+            if (responseContent != null)
+            {
+                try
+                {
+                    return JObject.Parse(responseContent);
+                }
+                catch {
+                    await Console.Out.WriteLineAsync("[!] Could not parse JSON from the response:");
+                }
+            }
             Console.WriteLine(responseContent);
-            return JObject.Parse(responseContent);
+            return null;
         }
 
         public async Task<JObject> GetNewClientTokenAsync(string clientId)
@@ -209,16 +244,14 @@ namespace Sharphound
             Console.WriteLine("[*] Get jobs for SharpHound client");
             var response = await SendRequestAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
-            Console.WriteLine(responseContent);
-
             return (JArray)JObject.Parse(responseContent)["data"];
         }
 
-        public async Task<HttpResponseMessage> PostIngestAsync(byte[] body)
+        public async Task<HttpResponseMessage> PostIngestAsync(byte[] body, int totalPosts, int thisPostNum)
         {
             var request = CreateRequestMessage("POST", "/api/v2/ingest", body);
 
-            Console.WriteLine($"[*] Sending FETCH data to API for ingestion");
+            Console.WriteLine($"[*] Sending FETCH data chunk {thisPostNum} of {totalPosts} to API for ingestion");
             return await SendRequestAsync(request);
         }
 
@@ -240,6 +273,7 @@ namespace Sharphound
         {
             Console.WriteLine("[*] Checking if SharpHound client " + sharpHoundClientName + " exists");
             JObject getClientsResponse = await adminClient.GetClientsAsync();
+            if (getClientsResponse == null) return null;
 
             JArray clients = (JArray)getClientsResponse["data"];
 
@@ -296,8 +330,13 @@ namespace Sharphound
             else
             {
                 JObject createdClient = await adminAPIClient.CreateClientAsync(SHARPHOUND_CLIENT_NAME, "sharphound");
-                sharpHoundClient = createdClient["data"] as JObject;
+                if (createdClient != null)
+                {
+                    sharpHoundClient = createdClient["data"] as JObject;
+                }
             }
+
+            if (sharpHoundClient == null) return;
 
             // Create job for SharpHound client
             HttpResponseMessage response = await adminAPIClient.CreateJobAsync(adminAPIClient, sharpHoundClient);
@@ -317,10 +356,14 @@ namespace Sharphound
             await sharpHoundAPIClientSigned.StartJobAsync((int)nextJob["id"]);
 
             // Prepare data
+            int totalPosts = bloodHoundData.Count();
+            int postsLeft = totalPosts;
             foreach (JObject hostBloodHoundData in bloodHoundData)
             {
                 // Send data to ingest
-                response = await sharpHoundAPIClientSigned.PostIngestAsync(Encoding.UTF8.GetBytes(hostBloodHoundData.ToString(Formatting.None)));
+                postsLeft--;
+                response = await sharpHoundAPIClientSigned.PostIngestAsync(Encoding.UTF8.GetBytes(hostBloodHoundData.ToString(Formatting.None)), totalPosts, totalPosts - postsLeft);
+
             }
             // Mark the job as done so the ingest API scoops it up
             await sharpHoundAPIClientSigned.EndJobAsync();

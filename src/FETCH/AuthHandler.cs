@@ -40,19 +40,19 @@ namespace Sharphound
 
             // First we sign our request
             var time = DateTime.Now.ToString("yyyy-MM-dd'T'HH:mm:sszzz");
-            Console.WriteLine("Time: " + time);
-            Console.WriteLine("Formatted: " + time.Substring(0, 13));
+            //Console.WriteLine("Time: " + time);
+            //Console.WriteLine("Formatted: " + time.Substring(0, 13));
             var opKey = SignOperationKey(_token, request.Method, request.RequestUri.AbsolutePath);
-            Console.WriteLine("opKey: " + EncodeBase64(opKey));
+            //Console.WriteLine("opKey: " + EncodeBase64(opKey));
             var dateKey = SignDateKey(opKey, time);
-            Console.WriteLine("dateKey: " + EncodeBase64(dateKey));
+            //Console.WriteLine("dateKey: " + EncodeBase64(dateKey));
             var bodyBytes = request.Content == null ? new byte[0] : await request.Content.ReadAsByteArrayAsync();
             var finalSignature = SignBody(dateKey, bodyBytes);
             request.Headers.Add(AuthorizationHeader, $"{AuthSignature} {_tokenId}");
             request.Headers.Add(DateHeader, time);
             request.Headers.Add(SignatureHeader, EncodeBase64(finalSignature));
-            Console.WriteLine("Signature: " + EncodeBase64(finalSignature));
-            Console.WriteLine("Token ID: " + _tokenId);
+            //Console.WriteLine("Signature: " + EncodeBase64(finalSignature));
+            //Console.WriteLine("Token ID: " + _tokenId);
             //Console.WriteLine("Token Key: " + _token);
 
             return await base.SendAsync(request, cancellationToken);
