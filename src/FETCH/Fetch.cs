@@ -752,7 +752,6 @@ namespace Sharphound
                     var computerSID = result.CollectionData["ComputerSID00"];
                     var lastSeenString = result.CollectionData["LastSeen00"];
 
-
                     // Parse the LastSeen string to DateTime for accurate comparison
                     var lastSeen = new DateTime();
                     DateTime.TryParseExact(lastSeenString, "M/d/yyyy h:mm:ss tt",
@@ -830,9 +829,9 @@ namespace Sharphound
                     ["FailureReason"] = null,
                     ["Results"] = new JArray(sessionDict.Select(kvp => new JObject
                     {
-                        ["UserSID"] = kvp.Key.Item1,
+                        ["ComputerSID"] = kvp.Key.Item2,
                         ["LastSeen"] = kvp.Value.Item2,
-                        ["ComputerSID"] = kvp.Key.Item2
+                        ["UserSID"] = kvp.Key.Item1
                     }))
                 };
             }

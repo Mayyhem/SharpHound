@@ -587,8 +587,11 @@ namespace Sharphound
                                 }
                                 await Fetch.QueryDatabaseAndSendChunks(adminAPIClient, sharpHoundClient, signedSharpHoundAPIClient,
                                     "TestLocalGroups", options, logger);
+                                // Sleep to avoid job ending/starting race conditions
+                                Thread.Sleep(5000);
                                 await Fetch.QueryDatabaseAndSendChunks(adminAPIClient, sharpHoundClient, signedSharpHoundAPIClient, 
                                     "TestSessions", options, logger);
+                                Thread.Sleep(5000);
                                 await Fetch.QueryDatabaseAndSendChunks(adminAPIClient, sharpHoundClient, signedSharpHoundAPIClient, 
                                     "TestUserRights", options, logger);
                             }
