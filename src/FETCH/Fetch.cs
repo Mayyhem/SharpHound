@@ -471,13 +471,11 @@ namespace Sharphound
             }
         }
 
-        public static async Task QueryDatabaseAndSendChunks(APIClient adminAPIClient, JToken sharpHoundClient, 
+        public static async Task QueryDatabaseAndSendChunks(APIClient adminAPIClient, JToken sharpHoundClient,
             APIClient signedSharpHoundAPIClient, string tableName, Options options, ILogger logger)
         {
-            // Create job for SharpHound client
+            // Create and start job for SharpHound client
             await adminAPIClient.CreateJobAsync(adminAPIClient, sharpHoundClient);
-
-            // Get the job we created and start it
             JArray jobs = await signedSharpHoundAPIClient.GetJobsAsync();
             if (jobs.Count == 0)
             {
@@ -487,65 +485,140 @@ namespace Sharphound
             JObject nextJob = jobs[0] as JObject;
             await signedSharpHoundAPIClient.StartJobAsync((int)nextJob["id"]);
 
-            // Number of computers to send in one request
-            const int sendChunkSize = 300; 
-            Dictionary<string, List<FetchQueryResult>> fetchQueryResults = new Dictionary<string, List<FetchQueryResult>>();
-            int queryResultsProcessed = 0;
+            // Number of computers to fetch from the database and process in each chunk
+            const int computersPerChunk = 300; 
+            int totalComputersProcessed = 0;
 
             Console.WriteLine($"[*] Querying table: {tableName}");
 
-            async IAsyncEnumerable<FetchQueryResult> GetQueryResults()
-            {
-                var queryTask = QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, tableName, options.LookbackDays);
-
-                await foreach (var result in queryTask)
-                {
-                    yield return result;
-                }
-            }
-
             try
             {
-                await foreach (var result in GetQueryResults())
+                bool hasMoreData = true;
+                while (hasMoreData)
                 {
-                    // MachineIDs won't resolve to domain computer SIDs/names in System_DISC tab
-                    // so we need another solution for test database data
-                    if (string.IsNullOrEmpty(result.CollectedComputerSID))
+                    var computerData = await FetchNextComputerChunk(options.SiteDatabase, options.SiteCode, options.TablePrefix, 
+                        tableName, options.LookbackDays, computersPerChunk, totalComputersProcessed);
+
+                    if (computerData.Count == 0)
                     {
-                        result.CollectedComputerSID = $"S-1-5-21-1642199630-664550351-1777980924-{result.CollectedComputerMachineID}";
-                        result.CollectedComputerNetbiosName = result.CollectedComputerMachineID;
-                        result.CollectedComputerFullDomainName = "APERTURE.LOCAL";
+                        hasMoreData = false;
+                        continue;
                     }
 
-                    if (!fetchQueryResults.ContainsKey(result.CollectedComputerSID))
-                    {
-                        fetchQueryResults[result.CollectedComputerSID] = new List<FetchQueryResult>();
-                    }
-                    fetchQueryResults[result.CollectedComputerSID].Add(result);
-
-                    if (fetchQueryResults.Count >= sendChunkSize)
-                    {
-                        await SendFormattedResults(signedSharpHoundAPIClient, fetchQueryResults);
-                        queryResultsProcessed += fetchQueryResults.Count;
-                        fetchQueryResults.Clear();
-                    }
+                    await SendFormattedResults(signedSharpHoundAPIClient, computerData);
+                    totalComputersProcessed += computerData.Count;
+                    logger.LogInformation($"Processed {totalComputersProcessed} computers for {tableName}");
                 }
 
-                // Send any remaining data
-                if (fetchQueryResults.Any())
-                {
-                    await SendFormattedResults(signedSharpHoundAPIClient, fetchQueryResults);
-                    queryResultsProcessed += fetchQueryResults.Count;
-                }
-
-                // Mark the job as done so the ingest API scoops it up
                 await signedSharpHoundAPIClient.EndJobAsync();
-
-                logger.LogInformation($"Total {tableName} processed: {queryResultsProcessed}");
+                logger.LogInformation($"Total computers processed for {tableName}: {totalComputersProcessed}");
             }
             catch (Exception ex)
             {
                 logger.LogError($"Error processing or sending data: {ex.Message}");
+            }
+        }
+
+        private static async Task<Dictionary<string, List<FetchQueryResult>>> FetchNextComputerChunk(
+            string siteDatabaseFqdn, string siteCode, string tablePrefix, string collectionType,
+            int lookbackDays, int computersPerChunk, int offset)
+        {
+            string connectionString = $"Server={siteDatabaseFqdn};Database=CM_{siteCode};Integrated Security=True;";
+            var computerData = new Dictionary<string, List<FetchQueryResult>>();
+
+            List<string> rowNames = GetRowNames(collectionType);
+
+            string query = $@"
+        WITH RankedComputers AS (
+            SELECT 
+                MachineID,
+                ROW_NUMBER() OVER (ORDER BY MachineID) AS RowNum
+            FROM (SELECT DISTINCT MachineID FROM {tablePrefix}{collectionType}_DATA) AS DistinctMachines
+        ),
+        TargetComputers AS (
+            SELECT MachineID
+            FROM RankedComputers
+            WHERE RowNum > @Offset AND RowNum <= @Offset + @ComputersPerChunk
+        )
+        SELECT 
+            FC.MachineID,
+            FC.CollectionDatetime00,
+            {string.Join(",\r\n", rowNames.Select(r => $"FC.{r}"))},
+            SD.SID0,
+            SD.Netbios_Name0,
+            SD.Full_Domain_Name0
+        FROM {tablePrefix}{collectionType}_DATA FC
+        INNER JOIN TargetComputers TC ON FC.MachineID = TC.MachineID
+        LEFT JOIN System_DISC SD ON FC.MachineID = SD.ItemKey
+        WHERE FC.CollectionDatetime00 >= DATEADD(day, -@LookbackDays, GETDATE())
+        ORDER BY FC.MachineID, FC.CollectionDatetime00 DESC";
+
+            using (SqlConnection connection = new SqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                using (SqlCommand command = new SqlCommand(query, connection))
+                {
+                    command.CommandTimeout = 300; // 5 minutes timeout
+                    command.Parameters.AddWithValue("@Offset", offset);
+                    command.Parameters.AddWithValue("@ComputersPerChunk", computersPerChunk);
+                    command.Parameters.AddWithValue("@LookbackDays", lookbackDays);
+
+                    using (SqlDataReader reader = await command.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            var result = new FetchQueryResult
+                            {
+                                CollectedComputerMachineID = reader["MachineID"].ToString(),
+                                CollectionDatetime = Convert.ToDateTime(reader["CollectionDatetime00"]),
+                                CollectionData = new Dictionary<string, string>(),
+                                CollectedComputerSID = reader["SID0"].ToString(),
+                                CollectedComputerNetbiosName = reader["Netbios_Name0"].ToString(),
+                                CollectedComputerFullDomainName = reader["Full_Domain_Name0"].ToString()
+                            };
+
+                            foreach (string rowName in rowNames)
+                            {
+                                result.CollectionData[rowName] = reader[rowName].ToString();
+                            }
+
+                            string computerSID = result.CollectedComputerSID;
+                            if (string.IsNullOrEmpty(computerSID))
+                            {
+                                computerSID = $"S-1-5-21-1642199630-664550351-1777980924-{result.CollectedComputerMachineID}";
+                                result.CollectedComputerSID = computerSID;
+                                result.CollectedComputerNetbiosName = result.CollectedComputerMachineID;
+                                result.CollectedComputerFullDomainName = "APERTURE.LOCAL";
+                            }
+
+                            if (!computerData.ContainsKey(computerSID))
+                            {
+                                computerData[computerSID] = new List<FetchQueryResult>();
+                            }
+                            computerData[computerSID].Add(result);
+                        }
+                    }
+                }
+            }
+
+            return computerData;
+        }
+
+        private static List<string> GetRowNames(string collectionType)
+        {
+            switch (collectionType)
+            {
+                case "Sessions":
+                case "TestSessions":
+                    return new List<string> { "UserSID00", "LastSeen00", "ComputerSID00" };
+                case "UserRights":
+                case "TestUserRights":
+                    return new List<string> { "Privilege00", "ObjectIdentifier00", "ObjectType00" };
+                case "LocalGroups":
+                case "TestLocalGroups":
+                    return new List<string> { "GroupName00", "GroupSID00", "MemberType00", "MemberSID00" };
+                default:
+                    throw new ArgumentException("Invalid collection type");
             }
         }
 
