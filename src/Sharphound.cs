@@ -553,6 +553,7 @@ namespace Sharphound
                         {
                             if (!string.IsNullOrEmpty(options.SiteDatabase) && !string.IsNullOrEmpty(options.SiteCode))
                             {
+                                /*
                                 // Query the site database for sessions, user rights, and local groups
                                 List<FetchQueryResult> sessionsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "Sessions", options.LookbackDays);
                                 List<FetchQueryResult> userRightsQueryResults = await Fetch.QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, "UserRights", options.LookbackDays);
@@ -575,6 +576,21 @@ namespace Sharphound
                                 {
                                     logger.LogError($"The site database ({options.SiteDatabase}) did not respond with FETCH data");
                                 }
+                                */
+                                (APIClient adminAPIClient, JToken sharpHoundClient, APIClient signedSharpHoundAPIClient) =
+                                    await APIClient.GetAPIClients();
+
+                                if (signedSharpHoundAPIClient == null)
+                                {
+                                    await Console.Out.WriteLineAsync("[!] Could not find API clients");
+                                    return;
+                                }
+                                await Fetch.QueryDatabaseAndSendChunks(adminAPIClient, sharpHoundClient, signedSharpHoundAPIClient,
+                                    "TestLocalGroups", options, logger);
+                                await Fetch.QueryDatabaseAndSendChunks(adminAPIClient, sharpHoundClient, signedSharpHoundAPIClient, 
+                                    "TestSessions", options, logger);
+                                await Fetch.QueryDatabaseAndSendChunks(adminAPIClient, sharpHoundClient, signedSharpHoundAPIClient, 
+                                    "TestUserRights", options, logger);
                             }
 
                             else

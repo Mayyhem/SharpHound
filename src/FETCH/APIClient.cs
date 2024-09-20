@@ -1,8 +1,10 @@
 ﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -30,33 +32,6 @@ namespace Sharphound
             _port = port;
             _credentials = credentials;
             _userAgent = userAgent;
-        }
-        public static APIClient InitializeAPIClient(string TOKEN_ID, string TOKEN_KEY, string SCHEME, string DOMAIN, int PORT)
-        {
-            // Initialize Credentials
-            Credentials adminCredentials = new Credentials(TOKEN_ID, TOKEN_KEY);
-
-            // Initialize HTTP client handler
-            var httpHandler = new HttpClientHandler();
-
-            // Proxy settings
-            //var trustAllCerts = new Fetch.TrustAllCertsPolicy();
-            //ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
-            //httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
-
-            // Initialize authentication handler
-            var authHandler = new AuthSigner(adminCredentials.TokenKey, adminCredentials.TokenId, httpHandler);
-
-            // Initialize HttpClient
-            var client = new HttpClient(authHandler);
-
-            // Initialize User Agent Header
-            var header = new ProductHeaderValue("sharphound",
-                Assembly.GetExecutingAssembly().GetName().Version.ToString());
-            client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(header));
-
-            // Initialize and return APIClient
-            return new APIClient(client, SCHEME, DOMAIN, PORT, adminCredentials);
         }
 
         public static void LoadEnvVariablesFromFile()
@@ -90,6 +65,64 @@ namespace Sharphound
             TOKEN_KEY = Environment.GetEnvironmentVariable("TOKEN_KEY");
         }
 
+        public static APIClient InitializeAPIClient(string TOKEN_ID, string TOKEN_KEY, string SCHEME, string DOMAIN, int PORT)
+        {
+            // Initialize Credentials
+            Credentials adminCredentials = new Credentials(TOKEN_ID, TOKEN_KEY);
+
+            // Initialize HTTP client handler
+            var httpHandler = new HttpClientHandler();
+
+            // Proxy settings
+            //var trustAllCerts = new Fetch.TrustAllCertsPolicy();
+            //ServicePointManager.ServerCertificateValidationCallback = trustAllCerts.ValidateCertificate;
+            //httpHandler.Proxy = new WebProxy("http://127.0.0.1:8080");
+
+            // Initialize authentication handler
+            var authHandler = new AuthSigner(adminCredentials.TokenKey, adminCredentials.TokenId, httpHandler);
+
+            // Initialize HttpClient
+            var client = new HttpClient(authHandler);
+
+            // Initialize User Agent Header
+            var header = new ProductHeaderValue("sharphound",
+                Assembly.GetExecutingAssembly().GetName().Version.ToString());
+            client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(header));
+
+            // Initialize and return APIClient
+            return new APIClient(client, SCHEME, DOMAIN, PORT, adminCredentials);
+        }
+
+        public static byte[] Compress(string toCompress)
+        {
+            var encoded = Encoding.UTF8.GetBytes(toCompress);
+            var compressed = Compress(encoded);
+            return compressed;
+        }
+
+        private static byte[] Compress(byte[] toCompress)
+        {
+            using var compressed = new MemoryStream();
+            using (var zipStream = new GZipStream(compressed, CompressionMode.Compress))
+            {
+                zipStream.Write(toCompress, 0, toCompress.Length);
+            }
+
+            return compressed.ToArray();
+        }
+
+        public static ByteArrayContent GetCompressedContent(byte[] body)
+        {
+            var compressedContent = Compress(body);
+
+            var requestContent = new ByteArrayContent(compressedContent, 0, compressedContent.Length);
+            requestContent.Headers.Add("Content-Encoding", "gzip");
+            requestContent.Headers.Add("Content-Type", "application/json");
+
+            return requestContent;
+        }
+
+
         private HttpRequestMessage CreateRequestMessage(string method, string uri, byte[] body = null)
         {
             var formattedUri = uri.StartsWith("/") ? uri.Substring(1) : uri;
@@ -97,6 +130,9 @@ namespace Sharphound
 
             if (body != null)
             {
+                // gzip
+                //request.Content = GetCompressedContent(body);
+                // Don't gzip
                 request.Content = new ByteArrayContent(body);
                 request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
             }
@@ -127,6 +163,60 @@ namespace Sharphound
             }
             return response;
         }
+
+        public async Task<JObject> GetClientsAsync()
+        {
+            var request = CreateRequestMessage("GET", "/api/v2/clients");
+
+            var response = await SendRequestAsync(request);
+            var responseContent = await response.Content.ReadAsStringAsync();
+            if (responseContent != null)
+            {
+                try
+                {
+                    return JObject.Parse(responseContent);
+                }
+                catch
+                {
+                    await Console.Out.WriteLineAsync("[!] Could not parse JSON from the response:");
+                }
+            }
+            Console.WriteLine(responseContent);
+            return null;
+        }
+
+        public static async Task<JToken> CheckIfSharpHoundClientExists(APIClient adminClient, string sharpHoundClientName)
+        {
+            Console.WriteLine("[*] Checking if SharpHound client " + sharpHoundClientName + " exists");
+            JObject getClientsResponse = await adminClient.GetClientsAsync();
+            if (getClientsResponse == null) return null;
+
+            JArray clients = (JArray)getClientsResponse["data"];
+
+            foreach (JObject client in clients)
+            {
+                if (client["name"] != null && client["name"].ToString() == sharpHoundClientName)
+                {
+                    Console.WriteLine("[*] SharpHound client named " + sharpHoundClientName + " found!");
+                    return client;
+                }
+            }
+            Console.WriteLine("[*] SharpHound client named " + sharpHoundClientName + " not found");
+
+            return null;
+        }
+
+        public async Task<JObject> GetNewClientTokenAsync(string clientId)
+        {
+            var request = CreateRequestMessage("PUT", $"/api/v2/clients/{clientId}/token");
+
+            Console.WriteLine("[*] Generating new API token for SharpHound client");
+            var response = await SendRequestAsync(request);
+            var responseContent = await response.Content.ReadAsStringAsync();
+            Console.WriteLine(responseContent);
+            return JObject.Parse(responseContent);
+        }
+
 
         public async Task<JObject> CreateClientAsync(string name, string type = "sharphound", string domainController = "")
         {
@@ -164,7 +254,7 @@ namespace Sharphound
             bool adStructureCollection = true;
             bool localGroupCollection = true;
             bool sessionCollection = true;
-            bool allTrustedDomains = false; 
+            bool allTrustedDomains = false;
             string[] domains = default;
             string[] ous = default;
 
@@ -186,73 +276,19 @@ namespace Sharphound
             var request = CreateRequestMessage("POST", $"/api/v2/clients/{sharpHoundClient["id"]}/jobs", Encoding.UTF8.GetBytes(body));
 
             // Send the request
-            Console.WriteLine("[*] Creating job for SharpHound client");
+            Console.WriteLine($"[*] Creating job for SharpHound client at {DateTime.UtcNow}");
             HttpResponseMessage response = await adminAPIClient.SendRequestAsync(request);
             return response;
-        }
-
-        public async Task<HttpResponseMessage> EndJobAsync()
-        {
-            var data = new
-            {
-                status = "Complete",
-                message = "Manual ingest upload"
-            };
-
-            var body = JsonConvert.SerializeObject(data);
-            var request = CreateRequestMessage("POST", "/api/v2/jobs/end", Encoding.UTF8.GetBytes(body));
-
-            Console.WriteLine("[*] Marking job as done");
-            return await SendRequestAsync(request);
-        }
-
-        public async Task<JObject> GetClientsAsync()
-        {
-            var request = CreateRequestMessage("GET", "/api/v2/clients");
-
-            var response = await SendRequestAsync(request);
-            var responseContent = await response.Content.ReadAsStringAsync();
-            if (responseContent != null)
-            {
-                try
-                {
-                    return JObject.Parse(responseContent);
-                }
-                catch {
-                    await Console.Out.WriteLineAsync("[!] Could not parse JSON from the response:");
-                }
-            }
-            Console.WriteLine(responseContent);
-            return null;
-        }
-
-        public async Task<JObject> GetNewClientTokenAsync(string clientId)
-        {
-            var request = CreateRequestMessage("PUT", $"/api/v2/clients/{clientId}/token");
-
-            Console.WriteLine("[*] Generating new API token for SharpHound client");
-            var response = await SendRequestAsync(request);
-            var responseContent = await response.Content.ReadAsStringAsync();
-            Console.WriteLine(responseContent);
-            return JObject.Parse(responseContent);
         }
 
         public async Task<JArray> GetJobsAsync()
         {
             var request = CreateRequestMessage("GET", "/api/v2/jobs/available");
 
-            Console.WriteLine("[*] Get jobs for SharpHound client");
+            Console.WriteLine("[*] Getting jobs for SharpHound client");
             var response = await SendRequestAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
             return (JArray)JObject.Parse(responseContent)["data"];
-        }
-
-        public async Task<HttpResponseMessage> PostIngestAsync(byte[] body, int totalPosts, int thisPostNum)
-        {
-            var request = CreateRequestMessage("POST", "/api/v2/ingest", body);
-
-            Console.WriteLine($"[*] Sending FETCH data chunk {thisPostNum} of {totalPosts} to API for ingestion");
-            return await SendRequestAsync(request);
         }
 
         public async Task<HttpResponseMessage> StartJobAsync(int jobId)
@@ -269,36 +305,7 @@ namespace Sharphound
             return await SendRequestAsync(request);
         }
 
-        public static async Task<JToken> CheckIfSharpHoundClientExists(APIClient adminClient, string sharpHoundClientName)
-        {
-            Console.WriteLine("[*] Checking if SharpHound client " + sharpHoundClientName + " exists");
-            JObject getClientsResponse = await adminClient.GetClientsAsync();
-            if (getClientsResponse == null) return null;
-
-            JArray clients = (JArray)getClientsResponse["data"];
-
-            foreach (JObject client in clients)
-            {
-                if (client["name"] != null && client["name"].ToString() == sharpHoundClientName)
-                {
-                    Console.WriteLine("[*] SharpHound client named " + sharpHoundClientName + " found!");
-                    return client;
-                }
-            }
-            Console.WriteLine("[*] SharpHound client named " + sharpHoundClientName + " not found");
-
-            return null;
-        }
-
-        public static APIClient InitializeIngestClient(Credentials ingestCredentials, string SCHEME, string BHE_DOMAIN, int PORT, string userAgent)
-        {
-            var httpHandler = new HttpClientHandler();
-            var authHandler = new AuthSigner(ingestCredentials.TokenKey, ingestCredentials.TokenId, httpHandler);
-            var client = new HttpClient(authHandler);
-            return new APIClient(client, SCHEME, BHE_DOMAIN, PORT, ingestCredentials, userAgent);
-        }
-
-        public static async Task<HttpResponseMessage> StartNextJob(APIClient signedIngestClient)
+        public static async Task<HttpResponseMessage> StartNextJobAsync(APIClient signedIngestClient)
         {
             JArray jobs = await signedIngestClient.GetJobsAsync();
             if (jobs.Count == 0)
@@ -308,6 +315,32 @@ namespace Sharphound
             }
             JObject nextJob = jobs[0] as JObject;
             return await signedIngestClient.StartJobAsync((int)nextJob["id"]);
+        }
+
+        public async Task<HttpResponseMessage> PostIngestAsync(byte[] body, int totalPosts = 0, int thisPostNum = 0)
+        {
+            var request = CreateRequestMessage("POST", "/api/v2/ingest", body);
+
+            if (totalPosts > 0)
+            {
+                Console.WriteLine($"[*] Sending FETCH data chunk {thisPostNum} of {totalPosts} to API for ingestion");
+            }
+            return await SendRequestAsync(request);
+        }
+
+        public async Task<HttpResponseMessage> EndJobAsync()
+        {
+            var data = new
+            {
+                status = "Complete",
+                message = "Manual ingest upload"
+            };
+
+            var body = JsonConvert.SerializeObject(data);
+            var request = CreateRequestMessage("POST", "/api/v2/jobs/end", Encoding.UTF8.GetBytes(body));
+
+            Console.WriteLine($"[*] Marking job as done at {DateTime.UtcNow}");
+            return await SendRequestAsync(request);
         }
 
         public static async Task SendItAsync(List<JObject> bloodHoundDataChunks)
@@ -367,6 +400,40 @@ namespace Sharphound
             }
             // Mark the job as done so the ingest API scoops it up
             await sharpHoundAPIClientSigned.EndJobAsync();
+        }
+
+        public static async Task<(APIClient, JToken, APIClient)> GetAPIClients()
+        {
+            // Get environment variables from %USERPROFILE%\.env
+            LoadEnvVariablesFromFile();
+            LoadSpecificEnvVariables(out string DOMAIN, out int PORT, out string SCHEME, out string SHARPHOUND_USER_AGENT, out string SHARPHOUND_CLIENT_NAME, out string TOKEN_ID, out string TOKEN_KEY);
+
+            // Initialize API client using admin token
+            APIClient adminAPIClient = InitializeAPIClient(TOKEN_ID, TOKEN_KEY, SCHEME, DOMAIN, PORT);
+
+            // Check if a SharpHound ingest client exists and get a token for it, otherwise create one
+            JToken sharpHoundClient = await CheckIfSharpHoundClientExists(adminAPIClient, SHARPHOUND_CLIENT_NAME);
+
+            if (sharpHoundClient != null)
+            {
+                JObject newTokenForExistingClient = await adminAPIClient.GetNewClientTokenAsync(sharpHoundClient["id"].ToString());
+                sharpHoundClient["token"] = newTokenForExistingClient;
+            }
+            else
+            {
+                JObject createdClient = await adminAPIClient.CreateClientAsync(SHARPHOUND_CLIENT_NAME, "sharphound");
+                if (createdClient != null)
+                {
+                    sharpHoundClient = createdClient["data"] as JObject;
+                }
+            }
+
+            if (sharpHoundClient == null) return (null, null, null);
+
+            // Create API client for SharpHound client
+            Credentials sharpHoundClientCreds = new Credentials(sharpHoundClient["token"]["data"]["id"].ToString(), sharpHoundClient["token"]["data"]["key"].ToString());
+            APIClient sharpHoundAPIClientSigned = InitializeAPIClient(sharpHoundClientCreds.TokenId, sharpHoundClientCreds.TokenKey, SCHEME, DOMAIN, PORT);
+            return (adminAPIClient, sharpHoundClient, sharpHoundAPIClientSigned);
         }
     }
 

@@ -500,7 +500,7 @@ def generate_test_data(user_count, computer_count, group_count):
         json.dump(groups_data, f, indent=4)
 
 if __name__ == "__main__":
-    user_count = 500
-    computer_count = 1000
-    group_count = 25
+    user_count = 100000
+    computer_count = 50000
+    group_count = 500
     generate_test_data(user_count, computer_count, group_count)

@@ -1,4 +1,5 @@
-﻿using Newtonsoft.Json;
+﻿using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SharpHoundRPC;
 using System;
@@ -361,26 +362,30 @@ namespace Sharphound
             return null;
         }
 
-        public static async Task<List<FetchQueryResult>> QuerySiteDatabase(string siteDatabaseFqdn, string siteCode, string tablePrefix, string collectionType, int lookbackDays)
+        public static async IAsyncEnumerable<FetchQueryResult> QuerySiteDatabase(
+            string siteDatabaseFqdn,
+            string siteCode,
+            string tablePrefix,
+            string collectionType,
+            int lookbackDays,
+            int pageSize = 1000)
         {
-            List<FetchQueryResult> results = new List<FetchQueryResult>();
-
             string connectionString = $"Server={siteDatabaseFqdn};Database=CM_{siteCode};Integrated Security=True;";
 
             List<string> rowNames = new List<string>();
-            if (collectionType == "Sessions")
+            if (collectionType == "Sessions" || collectionType == "TestSessions")
             {
                 rowNames.Add("UserSID00");
                 rowNames.Add("LastSeen00");
                 rowNames.Add("ComputerSID00");
             }
-            else if (collectionType == "UserRights")
+            else if (collectionType == "UserRights" || collectionType == "TestUserRights")
             {
                 rowNames.Add("Privilege00");
                 rowNames.Add("ObjectIdentifier00");
                 rowNames.Add("ObjectType00");
             }
-            else if (collectionType == "LocalGroups")
+            else if (collectionType == "LocalGroups" || collectionType == "TestLocalGroups")
             {
                 rowNames.Add("GroupName00");
                 rowNames.Add("GroupSID00");
@@ -389,12 +394,11 @@ namespace Sharphound
             }
             else
             {
-                Console.WriteLine("[!] Invalid collection type");
-                return null;
+                throw new ArgumentException("Invalid collection type");
             }
 
             // Get collection data organized by machine where data originated, filter to lookback period 
-            string query = @$"
+            string baseQuery = @$"
                 WITH FilteredCollections AS (
                     SELECT 
                         MachineID,
@@ -412,18 +416,34 @@ namespace Sharphound
                     SD.Full_Domain_Name0
                 FROM FilteredCollections FC
                 LEFT JOIN System_DISC SD ON FC.MachineID = SD.ItemKey
-                ORDER BY FC.CollectionDatetime00 DESC";
+                ORDER BY FC.CollectionDatetime00 DESC
+                OFFSET @Offset ROWS
+                FETCH NEXT @PageSize ROWS ONLY";
 
             using (SqlConnection connection = new SqlConnection(connectionString))
             {
-                try
-                {
-                    await connection.OpenAsync();
+                await connection.OpenAsync();
 
-                    using (SqlCommand command = new SqlCommand(query, connection))
+                int offset = 0;
+                bool hasMoreResults = true;
+
+                while (hasMoreResults)
+                {
+                    using (SqlCommand command = new SqlCommand(baseQuery, connection))
                     {
+                        // Set the timeout to 300 seconds (5 minutes)
+                        command.CommandTimeout = 300; 
+                        command.Parameters.AddWithValue("@Offset", offset);
+                        command.Parameters.AddWithValue("@PageSize", pageSize);
+
                         using (SqlDataReader reader = await command.ExecuteReaderAsync())
                         {
+                            if (!reader.HasRows)
+                            {
+                                hasMoreResults = false;
+                                continue;
+                            }
+
                             while (await reader.ReadAsync())
                             {
                                 var result = new FetchQueryResult
@@ -441,21 +461,109 @@ namespace Sharphound
                                     result.CollectionData[rowName] = reader[rowName].ToString();
                                 }
 
-                                results.Add(result);
+                                yield return result;
                             }
                         }
                     }
-                }
-                catch (SqlException ex)
-                {
-                    Console.WriteLine($"SQL Error: {ex.Message}");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error: {ex.Message}");
+
+                    offset += pageSize;
                 }
             }
-            return results;
+        }
+
+        public static async Task QueryDatabaseAndSendChunks(APIClient adminAPIClient, JToken sharpHoundClient, 
+            APIClient signedSharpHoundAPIClient, string tableName, Options options, ILogger logger)
+        {
+            // Create job for SharpHound client
+            await adminAPIClient.CreateJobAsync(adminAPIClient, sharpHoundClient);
+
+            // Get the job we created and start it
+            JArray jobs = await signedSharpHoundAPIClient.GetJobsAsync();
+            if (jobs.Count == 0)
+            {
+                Console.WriteLine("[!] No jobs found");
+                return;
+            }
+            JObject nextJob = jobs[0] as JObject;
+            await signedSharpHoundAPIClient.StartJobAsync((int)nextJob["id"]);
+
+            // Number of computers to send in one request
+            const int sendChunkSize = 300; 
+            Dictionary<string, List<FetchQueryResult>> fetchQueryResults = new Dictionary<string, List<FetchQueryResult>>();
+            int queryResultsProcessed = 0;
+
+            Console.WriteLine($"[*] Querying table: {tableName}");
+
+            async IAsyncEnumerable<FetchQueryResult> GetQueryResults()
+            {
+                var queryTask = QuerySiteDatabase(options.SiteDatabase, options.SiteCode, options.TablePrefix, tableName, options.LookbackDays);
+
+                await foreach (var result in queryTask)
+                {
+                    yield return result;
+                }
+            }
+
+            try
+            {
+                await foreach (var result in GetQueryResults())
+                {
+                    // MachineIDs won't resolve to domain computer SIDs/names in System_DISC tab
+                    // so we need another solution for test database data
+                    if (string.IsNullOrEmpty(result.CollectedComputerSID))
+                    {
+                        result.CollectedComputerSID = $"S-1-5-21-1642199630-664550351-1777980924-{result.CollectedComputerMachineID}";
+                        result.CollectedComputerNetbiosName = result.CollectedComputerMachineID;
+                        result.CollectedComputerFullDomainName = "APERTURE.LOCAL";
+                    }
+
+                    if (!fetchQueryResults.ContainsKey(result.CollectedComputerSID))
+                    {
+                        fetchQueryResults[result.CollectedComputerSID] = new List<FetchQueryResult>();
+                    }
+                    fetchQueryResults[result.CollectedComputerSID].Add(result);
+
+                    if (fetchQueryResults.Count >= sendChunkSize)
+                    {
+                        await SendFormattedResults(signedSharpHoundAPIClient, fetchQueryResults);
+                        queryResultsProcessed += fetchQueryResults.Count;
+                        fetchQueryResults.Clear();
+                    }
+                }
+
+                // Send any remaining data
+                if (fetchQueryResults.Any())
+                {
+                    await SendFormattedResults(signedSharpHoundAPIClient, fetchQueryResults);
+                    queryResultsProcessed += fetchQueryResults.Count;
+                }
+
+                // Mark the job as done so the ingest API scoops it up
+                await signedSharpHoundAPIClient.EndJobAsync();
+
+                logger.LogInformation($"Total {tableName} processed: {queryResultsProcessed}");
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Error processing or sending data: {ex.Message}");
+            }
+        }
+
+        private static async Task SendFormattedResults(APIClient signedSharpHoundAPIClient, Dictionary<string, List<FetchQueryResult>> computerResults)
+        {
+            var formattedResults = new JObject
+            {
+                ["meta"] = new JObject
+                {
+                    ["count"] = computerResults.Count,
+                    ["type"] = "computers",
+                    ["version"] = 5,
+                    ["methods"] = 107028
+                },
+                ["data"] = new JArray(computerResults.Select(kvp => FormatComputerData(kvp.Key, kvp.Value)))
+            };
+
+            await signedSharpHoundAPIClient.PostIngestAsync(Encoding.UTF8.GetBytes(formattedResults.ToString(Formatting.None)));
         }
 
         public static List<FetchQueryResult> ProcessCMPivotResults(JObject cmPivotResult)
