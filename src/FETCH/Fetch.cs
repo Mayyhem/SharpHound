@@ -104,7 +104,7 @@ namespace Sharphound
                 }
                 return operationId;
             }
-            catch (ManagementException ex)
+            catch (Exception ex)
             {
                 Console.WriteLine("[!] An error occurred while attempting to call the SMS Provider: " + ex.Message);
                 return 0;
@@ -362,141 +362,140 @@ namespace Sharphound
             return null;
         }
 
-        public static async IAsyncEnumerable<FetchQueryResult> QuerySiteDatabase(
-            string siteDatabaseFqdn,
-            string siteCode,
-            string tablePrefix,
-            string collectionType,
-            int lookbackDays,
-            int pageSize = 1000)
-        {
-            string connectionString = $"Server={siteDatabaseFqdn};Database=CM_{siteCode};Integrated Security=True;";
+        // public static async IAsyncEnumerable<FetchQueryResult> QuerySiteDatabase(
+        //     string siteDatabaseFqdn,
+        //     string siteCode,
+        //     string tablePrefix,
+        //     string collectionType,
+        //     int lookbackDays,
+        //     int pageSize = 1000)
+        // {
+        //     string connectionString = $"Server={siteDatabaseFqdn};Database=CM_{siteCode};Integrated Security=True;";
 
-            List<string> rowNames = new List<string>();
-            if (collectionType == "Sessions" || collectionType == "TestSessions")
-            {
-                rowNames.Add("UserSID00");
-                rowNames.Add("LastSeen00");
-                rowNames.Add("ComputerSID00");
-            }
-            else if (collectionType == "UserRights" || collectionType == "TestUserRights")
-            {
-                rowNames.Add("Privilege00");
-                rowNames.Add("ObjectIdentifier00");
-                rowNames.Add("ObjectType00");
-            }
-            else if (collectionType == "LocalGroups" || collectionType == "TestLocalGroups")
-            {
-                rowNames.Add("GroupName00");
-                rowNames.Add("GroupSID00");
-                rowNames.Add("MemberType00");
-                rowNames.Add("MemberSID00");
-            }
-            else
-            {
-                throw new ArgumentException("Invalid collection type");
-            }
+        //     List<string> rowNames = new List<string>();
+        //     if (collectionType == "Sessions" || collectionType == "TestSessions")
+        //     {
+        //         rowNames.Add("UserSID00");
+        //         rowNames.Add("LastSeen00");
+        //         rowNames.Add("ComputerSID00");
+        //     }
+        //     else if (collectionType == "UserRights" || collectionType == "TestUserRights")
+        //     {
+        //         rowNames.Add("Privilege00");
+        //         rowNames.Add("ObjectIdentifier00");
+        //         rowNames.Add("ObjectType00");
+        //     }
+        //     else if (collectionType == "LocalGroups" || collectionType == "TestLocalGroups")
+        //     {
+        //         rowNames.Add("GroupName00");
+        //         rowNames.Add("GroupSID00");
+        //         rowNames.Add("MemberType00");
+        //         rowNames.Add("MemberSID00");
+        //     }
+        //     else
+        //     {
+        //         throw new ArgumentException("Invalid collection type");
+        //     }
 
-            // Get collection data organized by machine where data originated, filter to lookback period 
-            string baseQuery = @$"
-                WITH FilteredCollections AS (
-                    SELECT 
-                        MachineID,
-                        CollectionDatetime00,
-                        {string.Join(",\r\n", rowNames)}
-                    FROM {tablePrefix}{collectionType}_DATA
-                    WHERE CollectionDatetime00 >= DATEADD(day, -{lookbackDays}, GETDATE())
-                )
-                SELECT 
-                    FC.MachineID,
-                    FC.CollectionDatetime00,
-                    {string.Join(",\r\n", rowNames.Select(r => $"FC.{r}"))},
-                    SD.SID0,
-                    SD.Netbios_Name0,
-                    SD.Full_Domain_Name0
-                FROM FilteredCollections FC
-                LEFT JOIN System_DISC SD ON FC.MachineID = SD.ItemKey
-                ORDER BY FC.CollectionDatetime00 DESC
-                OFFSET @Offset ROWS
-                FETCH NEXT @PageSize ROWS ONLY";
+        //     // Get collection data organized by machine where data originated, filter to lookback period 
+        //     string baseQuery = @$"
+        //         WITH FilteredCollections AS (
+        //             SELECT 
+        //                 MachineID,
+        //                 CollectionDatetime00,
+        //                 {string.Join(",\r\n", rowNames)}
+        //             FROM {tablePrefix}{collectionType}_DATA
+        //             WHERE CollectionDatetime00 >= DATEADD(day, -{lookbackDays}, GETDATE())
+        //         )
+        //         SELECT 
+        //             FC.MachineID,
+        //             FC.CollectionDatetime00,
+        //             {string.Join(",\r\n", rowNames.Select(r => $"FC.{r}"))},
+        //             SD.SID0,
+        //             SD.Netbios_Name0,
+        //             SD.Full_Domain_Name0
+        //         FROM FilteredCollections FC
+        //         LEFT JOIN System_DISC SD ON FC.MachineID = SD.ItemKey
+        //         ORDER BY FC.CollectionDatetime00 DESC
+        //         OFFSET @Offset ROWS
+        //         FETCH NEXT @PageSize ROWS ONLY";
 
-            using (SqlConnection connection = new SqlConnection(connectionString))
-            {
-                await connection.OpenAsync();
+        //     using (SqlConnection connection = new SqlConnection(connectionString))
+        //     {
+        //         await connection.OpenAsync();
 
-                int offset = 0;
-                bool hasMoreResults = true;
+        //         int offset = 0;
+        //         bool hasMoreResults = true;
 
-                while (hasMoreResults)
-                {
-                    using (SqlCommand command = new SqlCommand(baseQuery, connection))
-                    {
-                        // Set the timeout to 300 seconds (5 minutes)
-                        command.CommandTimeout = 300; 
-                        command.Parameters.AddWithValue("@Offset", offset);
-                        command.Parameters.AddWithValue("@PageSize", pageSize);
+        //         while (hasMoreResults)
+        //         {
+        //             using (SqlCommand command = new SqlCommand(baseQuery, connection))
+        //             {
+        //                 // Set the timeout to 300 seconds (5 minutes)
+        //                 command.CommandTimeout = 300; 
+        //                 command.Parameters.AddWithValue("@Offset", offset);
+        //                 command.Parameters.AddWithValue("@PageSize", pageSize);
 
-                        using (SqlDataReader reader = await command.ExecuteReaderAsync())
-                        {
-                            if (!reader.HasRows)
-                            {
-                                hasMoreResults = false;
-                                continue;
-                            }
+        //                 using (SqlDataReader reader = await command.ExecuteReaderAsync())
+        //                 {
+        //                     if (!reader.HasRows)
+        //                     {
+        //                         hasMoreResults = false;
+        //                         continue;
+        //                     }
 
-                            while (await reader.ReadAsync())
-                            {
-                                var result = new FetchQueryResult
-                                {
-                                    CollectedComputerMachineID = reader["MachineID"].ToString(),
-                                    CollectionDatetime = Convert.ToDateTime(reader["CollectionDatetime00"]),
-                                    CollectionData = new Dictionary<string, string>(),
-                                    CollectedComputerSID = reader["SID0"].ToString(),
-                                    CollectedComputerNetbiosName = reader["Netbios_Name0"].ToString(),
-                                    CollectedComputerFullDomainName = reader["Full_Domain_Name0"].ToString()
-                                };
+        //                     while (await reader.ReadAsync())
+        //                     {
+        //                         var result = new FetchQueryResult
+        //                         {
+        //                             CollectedComputerMachineID = reader["MachineID"].ToString(),
+        //                             CollectionDatetime = Convert.ToDateTime(reader["CollectionDatetime00"]),
+        //                             CollectionData = new Dictionary<string, string>(),
+        //                             CollectedComputerSID = reader["SID0"].ToString(),
+        //                             CollectedComputerNetbiosName = reader["Netbios_Name0"].ToString(),
+        //                             CollectedComputerFullDomainName = reader["Full_Domain_Name0"].ToString()
+        //                         };
 
-                                foreach (string rowName in rowNames)
-                                {
-                                    result.CollectionData[rowName] = reader[rowName].ToString();
-                                }
+        //                         foreach (string rowName in rowNames)
+        //                         {
+        //                             result.CollectionData[rowName] = reader[rowName].ToString();
+        //                         }
 
-                                yield return result;
-                            }
-                        }
-                    }
+        //                         yield return result;
+        //                     }
+        //                 }
+        //             }
 
-                    offset += pageSize;
-                }
-            }
-        }
+        //             offset += pageSize;
+        //         }
+        //     }
+        // }
 
         public static async Task QueryDatabaseAndSendChunks(APIClient adminAPIClient, JToken sharpHoundClient,
             APIClient signedSharpHoundAPIClient, string tableName, Options options, ILogger logger)
         {
-            // Create and start job for SharpHound client
-            await adminAPIClient.CreateJobAsync(adminAPIClient, sharpHoundClient);
-            JArray jobs = await signedSharpHoundAPIClient.GetJobsAsync();
-            if (jobs.Count == 0)
-            {
-                Console.WriteLine("[!] No jobs found");
-                return;
-            }
-            JObject nextJob = jobs[0] as JObject;
-            await signedSharpHoundAPIClient.StartJobAsync((int)nextJob["id"]);
+            try {
+                // Create and start job for SharpHound client
+                await adminAPIClient.CreateJobAsync(adminAPIClient, sharpHoundClient);
+                JArray jobs = await signedSharpHoundAPIClient.GetJobsAsync();
+                if (jobs.Count == 0)
+                {
+                    Console.WriteLine("[!] No jobs found");
+                    return;
+                }
+                JObject nextJob = jobs[0] as JObject;
+                await signedSharpHoundAPIClient.StartJobAsync((int)nextJob["id"]);
 
-            // Number of computers to fetch from the database and process in each chunk
-            const int computersPerChunk = 300; 
-            int totalComputersProcessed = 0;
+                // Number of computers to fetch from the database and process in each chunk
+                const int computersPerChunk = 300; 
+                int totalComputersProcessed = 0;
 
-            Console.WriteLine($"[*] Querying table: {tableName}");
+                Console.WriteLine($"[*] Querying table: {tableName}");
 
-            try
-            {
                 bool hasMoreData = true;
                 while (hasMoreData)
                 {
-                    var computerData = await FetchNextComputerChunk(options.SiteDatabase, options.SiteCode, options.TablePrefix, 
+                    var computerData = await FetchNextComputerChunk(options.SiteDatabase, options.SiteCode,
                         tableName, options.LookbackDays, computersPerChunk, totalComputersProcessed);
 
                     if (computerData.Count == 0)
@@ -520,7 +519,7 @@ namespace Sharphound
         }
 
         private static async Task<Dictionary<string, List<FetchQueryResult>>> FetchNextComputerChunk(
-            string siteDatabaseFqdn, string siteCode, string tablePrefix, string collectionType,
+            string siteDatabaseFqdn, string siteCode, string collectionType,
             int lookbackDays, int computersPerChunk, int offset)
         {
             string connectionString = $"Server={siteDatabaseFqdn};Database=CM_{siteCode};Integrated Security=True;";
@@ -528,30 +527,20 @@ namespace Sharphound
 
             List<string> rowNames = GetRowNames(collectionType);
 
-            string query = $@"
-        WITH RankedComputers AS (
-            SELECT 
-                MachineID,
-                ROW_NUMBER() OVER (ORDER BY MachineID) AS RowNum
-            FROM (SELECT DISTINCT MachineID FROM {tablePrefix}{collectionType}_DATA) AS DistinctMachines
-        ),
-        TargetComputers AS (
-            SELECT MachineID
-            FROM RankedComputers
-            WHERE RowNum > @Offset AND RowNum <= @Offset + @ComputersPerChunk
-        )
-        SELECT 
-            FC.MachineID,
-            FC.CollectionDatetime00,
-            {string.Join(",\r\n", rowNames.Select(r => $"FC.{r}"))},
-            SD.SID0,
-            SD.Netbios_Name0,
-            SD.Full_Domain_Name0
-        FROM {tablePrefix}{collectionType}_DATA FC
-        INNER JOIN TargetComputers TC ON FC.MachineID = TC.MachineID
-        LEFT JOIN System_DISC SD ON FC.MachineID = SD.ItemKey
-        WHERE FC.CollectionDatetime00 >= DATEADD(day, -@LookbackDays, GETDATE())
-        ORDER BY FC.MachineID, FC.CollectionDatetime00 DESC";
+            string query;
+            switch (collectionType) {
+                case "Sessions":
+                    query = @"dbo.FETCH_Collect_Sessions";
+                    break;
+                case "UserRights":
+                    query = @"dbo.FETCH_Collect_UserRights";
+                    break;
+                case "LocalGroups":
+                    query = @"dbo.FETCH_Collect_LocalGroups";
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(collectionType), collectionType);
+            }
 
             using (SqlConnection connection = new SqlConnection(connectionString))
             {
@@ -560,7 +549,7 @@ namespace Sharphound
                 {
                     command.CommandTimeout = 300; // 5 minutes timeout
                     command.Parameters.AddWithValue("@Offset", offset);
-                    command.Parameters.AddWithValue("@ComputersPerChunk", computersPerChunk);
+                    command.Parameters.AddWithValue("@PageSize", computersPerChunk);
                     command.Parameters.AddWithValue("@LookbackDays", lookbackDays);
 
                     using (SqlDataReader reader = await command.ExecuteReaderAsync())
