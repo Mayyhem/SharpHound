@@ -104,7 +104,7 @@ namespace Sharphound
                 }
                 return operationId;
             }
-            catch (ManagementException ex)
+            catch (Exception ex)
             {
                 Console.WriteLine("[!] An error occurred while attempting to call the SMS Provider: " + ex.Message);
                 return 0;
@@ -474,25 +474,25 @@ namespace Sharphound
         public static async Task QueryDatabaseAndSendChunks(APIClient adminAPIClient, JToken sharpHoundClient,
             APIClient signedSharpHoundAPIClient, string tableName, Options options, ILogger logger)
         {
-            // Create and start job for SharpHound client
-            await adminAPIClient.CreateJobAsync(adminAPIClient, sharpHoundClient);
-            JArray jobs = await signedSharpHoundAPIClient.GetJobsAsync();
-            if (jobs.Count == 0)
-            {
-                Console.WriteLine("[!] No jobs found");
-                return;
-            }
-            JObject nextJob = jobs[0] as JObject;
-            await signedSharpHoundAPIClient.StartJobAsync((int)nextJob["id"]);
-
-            // Number of computers to fetch from the database and process in each chunk
-            const int computersPerChunk = 300; 
-            int totalComputersProcessed = 0;
-
-            Console.WriteLine($"[*] Querying table: {tableName}");
-
             try
             {
+                // Create and start job for SharpHound client
+                await adminAPIClient.CreateJobAsync(adminAPIClient, sharpHoundClient);
+                JArray jobs = await signedSharpHoundAPIClient.GetJobsAsync();
+                if (jobs.Count == 0)
+                {
+                    Console.WriteLine("[!] No jobs found");
+                    return;
+                }
+                JObject nextJob = jobs[0] as JObject;
+                await signedSharpHoundAPIClient.StartJobAsync((int)nextJob["id"]);
+
+                // Number of computers to fetch from the database and process in each chunk
+                const int computersPerChunk = 300; 
+                int totalComputersProcessed = 0;
+
+                Console.WriteLine($"[*] Querying table: {tableName}");
+
                 bool hasMoreData = true;
                 while (hasMoreData)
                 {
@@ -533,7 +533,8 @@ namespace Sharphound
             SELECT 
                 MachineID,
                 ROW_NUMBER() OVER (ORDER BY MachineID) AS RowNum
-            FROM (SELECT DISTINCT MachineID FROM {tablePrefix}{collectionType}_DATA) AS DistinctMachines
+            FROM (SELECT DISTINCT MachineID FROM {tablePrefix}{collectionType}_DATA
+            WHERE CollectionDatetime00 >= DATEADD(day, -@LookbackDays, GETDATE())) AS DistinctMachines
         ),
         TargetComputers AS (
             SELECT MachineID
@@ -550,8 +551,7 @@ namespace Sharphound
         FROM {tablePrefix}{collectionType}_DATA FC
         INNER JOIN TargetComputers TC ON FC.MachineID = TC.MachineID
         LEFT JOIN System_DISC SD ON FC.MachineID = SD.ItemKey
-        WHERE FC.CollectionDatetime00 >= DATEADD(day, -@LookbackDays, GETDATE())
-        ORDER BY FC.MachineID, FC.CollectionDatetime00 DESC";
+        ORDER BY FC.MachineID DESC";
 
             using (SqlConnection connection = new SqlConnection(connectionString))
             {
